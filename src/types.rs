@@ -2,12 +2,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
 
+pub static mut USE_COLORS: bool = false;
+
 #[derive(Clone)]
 pub enum Expr {
     Nil,
     Num(f64),
     Str(String),
     Sym(String),
+    Keyword(String),
     List(Rc<Vec<Expr>>),
     NatFunc(fn(Vec<Expr>) -> Result<Expr, String>),
     Func {
@@ -25,6 +28,7 @@ impl std::fmt::Display for Expr {
             Expr::Nil => write!(f, "()"),
             Expr::Num(n) => write!(f, "{}", n),
             Expr::Str(s) => write!(f, "{}", s),
+            Expr::Keyword(s) => write!(f, "{}", s),
             Expr::Sym(s) => write!(f, "{}", s),
             Expr::List(list) => {
                 f.write_str("(")?;
@@ -47,26 +51,49 @@ impl std::fmt::Display for Expr {
 
 impl std::fmt::Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Expr::Nil => write!(f, "()"),
-            Expr::Num(n) => write!(f, "\x1b[93m{}\x1b[0m", n),
-            Expr::Str(s) => write!(f, "\x1b[32m\"{}\"\x1b[0m", s),
-            Expr::Sym(s) => write!(f, "{}", s),
-            Expr::List(list) => {
-                f.write_str("(")?;
-                let mut it = list.iter();
-                match it.next() {
-                    Some(x) => write!(f, "{:?}", x)?,
-                    None => {}
+        unsafe {
+            match self {
+                Expr::Nil => write!(f, "()"),
+                Expr::Num(n) => if USE_COLORS { 
+                    write!(f, "\x1b[93m{}\x1b[0m", n)
+                }else{
+                    write!(f, "{}", n)
                 }
-                for expr in it {
-                    write!(f," {:?}", expr)?;
+                Expr::Str(s) => if USE_COLORS {
+                    write!(f, "\x1b[32m\"{}\"\x1b[0m", s)
+                } else {
+                    write!(f, "\"{}\"", s)
                 }
-                f.write_str(")")?;
-                Ok(())
-            },
-            Expr::NatFunc(_) => write!(f, "\x1b[36m[Function]\x1b[0m"),
-            Expr::Func { .. } => write!(f, "\x1b[36m[Lambda]\x1b[0m"),
+                Expr::Sym(s) => write!(f, "{}", s),
+                Expr::Keyword(s) => if USE_COLORS {
+                    write!(f, "\x1b[34m:{}\x1b[0m", s)
+                } else {
+                    write!(f, ":{}", s)
+                }
+                Expr::List(list) => {
+                    f.write_str("(")?;
+                    let mut it = list.iter();
+                    match it.next() {
+                        Some(x) => write!(f, "{:?}", x)?,
+                        None => {}
+                    }
+                    for expr in it {
+                        write!(f," {:?}", expr)?;
+                    }
+                    f.write_str(")")?;
+                    Ok(())
+                },
+                Expr::NatFunc(_) => if USE_COLORS {
+                    write!(f, "\x1b[36m[Function]\x1b[0m")
+                } else {
+                    write!(f, "[Function]")
+                }
+                Expr::Func { .. } => if USE_COLORS {
+                    write!(f, "\x1b[36m[Lambda]\x1b[0m")
+                } else {
+                    write!(f, "[Lambda]")
+                }
+            }
         }
     }
 }
@@ -79,6 +106,7 @@ impl PartialEq for Expr {
             (Num(ref a), Num(ref b)) => a == b,
             (Str(ref a), Str(ref b)) => a == b,
             (Sym(ref a), Sym(ref b)) => a == b,
+            (Keyword(ref a), Keyword(ref b)) => a == b,
             (List(ref a), List(ref b)) => a == b,
             (Func { .. }, Func { .. }) => false,
             _ => false,
@@ -185,3 +213,5 @@ impl EnvStruct {
 }
 
 pub type Env = Rc<EnvStruct>;
+pub type ExprList = Vec<Expr>;
+pub type ExprErr = Result<Expr, String>;

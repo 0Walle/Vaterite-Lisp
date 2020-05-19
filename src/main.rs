@@ -1,11 +1,115 @@
 #[macro_use]
 mod parser;
 mod types;
+mod core;
 use types::{Expr, Env};
 use std::io;
 use std::io::Write;
 use std::rc::Rc;
-use std::time::{Instant, SystemTime};
+use std::time::{Instant};
+use std::fs::File;
+use std::io::prelude::*;
+use std::env;
+use std::path::Path;
+
+fn quasiquote(ast: Expr) -> Expr {
+    match ast {
+        Expr::Sym(_) => list![Expr::Sym("quote".to_string()), ast],
+        Expr::List(list) if list.len() > 0 => {
+            let head = &list[0];
+            match head {
+                Expr::Sym(s) if s == "unquote" => return if list.len() > 1 { list[1].clone() } else { Expr::Nil },
+                Expr::List(l) if l.len() > 0 => match &l[0] {
+                    Expr::Sym(s) if s == "unquote-splicing" => return list![
+                        Expr::Sym("append".to_string()),
+                        
+                        if  l.len() > 1 {
+                            l[1].clone()
+                        } else {
+                            Expr::Nil
+                        },
+                        quasiquote(list!(list[1..].to_vec()))
+                    ],
+                    _ => {}
+                }
+                _ => {}
+            };
+            let car = quasiquote(head.clone());
+            let cdr = quasiquote(list!(list[1..].to_vec()));
+            if cdr.is_nil() {
+                return list![Expr::Sym("list".to_string()), car]
+            }
+            
+            if let Expr::List(l) = &cdr {
+                return match &l[0] {
+                    Expr::Sym(s) if s == "list" => {
+                        let mut start = vec![Expr::Sym("list".to_string()), car];
+                        start.extend_from_slice(&l[1..]);
+                        list!(start)
+                    }
+                    _ => list![Expr::Sym("cons".to_string()), car, cdr]
+                }
+            }
+
+            return list![Expr::Sym("cons".to_string()), car, cdr]
+        }
+        _ => ast
+    }
+}
+
+fn is_macro_call(ast: Expr, env: Env) -> bool {
+    match ast {
+        Expr::List(l) if l.len() > 0 => if let Expr::Sym(sym) = &l[0] {
+            match env.get(sym.clone()) {
+                Ok(e) => match e {
+                    Expr::Func{ is_macro, .. } => return is_macro,
+                    _ => false
+                }
+                Err(_) => false
+            }
+        }else {
+            false
+        }
+        _ => false
+    }
+}
+
+fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
+    let mut was_expanded = false;
+    while is_macro_call(ast.clone(), env.clone()) {
+        if let Expr::List(l) = &ast { 
+            if let Expr::Sym(s) = &l[0] {
+                let makro = if let Ok(name) = env.get(s.clone()) {
+                    name
+                }else{
+                    return (false, Err("Macro not defined".to_string()));
+                };
+
+                if let Expr::Func { env: ref menv, ref params, ast: ref mast, .. } = makro {
+                    let args = l[1..].to_vec();
+                    let params = if let Expr::List(l) = &**params {
+                        l
+                    }else{
+                        unreachable!();
+                    };
+
+                    let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), params.clone(), args){
+                        Ok(scope) => scope,
+                        Err(err) => return (false, Err(err))
+                    };
+                    let macro_ast = &**mast;
+                    ast = match eval(macro_ast.clone(), macro_scope.clone()) {
+                        Ok(ast) => ast,
+                        Err(err) => return (false, Err(err))
+                    };
+                    env = macro_scope;
+                }
+            }
+        }
+        was_expanded = true;       
+    };
+    (was_expanded,Ok(ast))
+}
 
 fn eval_ast(ast: &Expr, env: &Env) -> Result<Expr, String> {
     match ast {
@@ -30,6 +134,16 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                 if l.len() == 0 {
                     return Ok(Expr::Nil);
                 }
+
+                match macro_expand(ast.clone(), env.clone()) {
+                    (true, Ok(nast)) => {
+                        ast = nast;
+                        continue 'tco;
+                    }
+                    (_, Err(err)) => return Err(err),
+                    _ => ()
+                }
+                
     
                 let head = &l[0];
                 match head {
@@ -39,6 +153,14 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         }else{
                             Ok(l[1].clone())
                         }
+                    Expr::Sym(sym) if sym == "quasiquote" => 
+                        if l.len() < 1 {
+                            Err("quasiquote form requires 1 argument".to_string())
+                        }else{
+                            ast = quasiquote(l[1].clone());
+                            continue 'tco;
+                        }
+                    Expr::Sym(sym) if sym == "macro-expand" => macro_expand(l[1].clone(), env.clone()).1,
                     Expr::Sym(sym) if sym == "bench" =>
                         if l.len() < 1 {
                             Err("bench form requires 1 argument".to_string())
@@ -131,15 +253,37 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         } else {
                             Err("Binding name must be a symbol".to_string())
                         }
+                    Expr::Sym(sym) if sym == "defmacro" =>
+                        if l.len() < 3 {
+                            Err("defmacro form requires 3 arguments".to_string())
+                        } else if let Expr::Sym(s) = &l[1] {
+                            if let Expr::List(_) = &l[2] {
+                                let func = Expr::Func{
+                                    eval,
+                                    is_macro: true,
+                                    params: Rc::new(l[2].clone()),
+                                    ast: Rc::new(l[3].clone()),
+                                    env: env.clone()
+                                };
+                                env.set(s.clone(), func);
+                                Ok(Expr::Nil)
+                            } else {
+                                Err("Lambda list must be a list".to_string())
+                            }
+                        } else {
+                            Err("Binding name must be a symbol".to_string())
+                        }
                     Expr::Sym(sym) if sym == "fn" => 
                         if l.len() < 3 {
                             Err("fn form requires 2 arguments".to_string())
                         } else if let Expr::List(_) = &l[1] {
+                            let mut body = vec![Expr::Sym("block".to_string())];
+                            body.extend_from_slice(&l[2..]);
                             Ok(Expr::Func{
                                 eval,
                                 is_macro: false,
                                 params: Rc::new(l[1].clone()),
-                                ast: Rc::new(l[2].clone()),
+                                ast: Rc::new(list!(body)),
                                 env: env.clone()
                             })
                         } else {
@@ -177,11 +321,22 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             eval(expr.clone(), env.clone())?;
                         };
                         //eval(l[len].clone(), env.clone())
-                        ast = l[len].clone();
+                        ast = l[len-1].clone();
                         continue 'tco;
                     }
-                    _ => match eval_ast(&ast, &env)? {
-                        Expr::List(ref list) => {
+                    Expr::Sym(ref sym) if sym == "eval" => {
+                        ast = eval(l[1].clone(), env.clone())?;
+                        while let Some(ref e) = env.clone().access {
+                            env = e.clone();
+                        }
+                        continue 'tco;
+                    }
+                    _ => match ast {
+                        Expr::List(v) =>  {
+                            let mut list: Vec<Expr> = vec![];
+                            for expr in v.iter() {
+                                list.push(eval(expr.clone(), env.clone())?)
+                            }
                             let ref func = list[0].clone();
                             let args = list[1..].to_vec();
                             match func {
@@ -203,9 +358,9 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                                 },
                                 _ => Err("Attempt to call non-function".to_string()),
                             }
-                            //return func.apply(list[1..].to_vec())
+                            //Ok(Expr::List(Rc::new(lst)))
                         }
-                        _ => Err("Expected a list".to_string()),
+                        _ => Err("Expected a list".to_string())
                     }
                 }
             }
@@ -216,277 +371,133 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
     ret
 }
 
-macro_rules! ord_op {
-    ($op:tt, $v:expr) => {{
-        let mut left = match &$v[0] {
-            Expr::Num(n) => *n,
-            _ => return Err("Invalid number arguments".to_string())
-        };
-        for e in $v[1..].iter() {
-            if let Expr::Num(n) = e {
-                if left $op *n {
-                    left = *n;
-                    continue
-                }else{
-                    return Ok(Expr::Nil)
-                }
-            }else{
-                return Err("Invalid number arguments".to_string())
-            }
+fn arg_parse(mut args: env::Args) -> (u8, Vec<String>) {
+    /*
+        0b0000
+          ||||
+          |||+- print last file expression
+    */
+    let mut flags = 0b0001;
+    let mut common_args = vec![];
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--color" => unsafe { types::USE_COLORS = true },
+            "--print-last" => flags &= !1,
+            _ => common_args.push(arg)
         }
-        return Ok(Expr::Sym("t".to_string()))
-    }};
-}
-
-macro_rules! add_mul_op {
-    ($op:tt, $init:expr, $args:expr) => {
-        Ok(Expr::Num(
-            $args.iter().fold(Ok($init), |acc, val| if let Expr::Num(n) = val {
-                Ok(acc? $op *n)
-            }else{
-                return Err("Invalid number arguments".to_string())
-            })?
-        ))
     };
-}
-
-macro_rules! sub_div_op {
-    ($op:tt, $none:expr, $one:expr, $args:expr) => {{
-        if $args.len() == 0 {
-            $none
-        }else if let Expr::Num(first) = &$args[0]{
-            if $args.len() > 1 {
-                Ok(Expr::Num($args[1..].iter().fold(Ok(first.clone()), |acc, val| if let Expr::Num(n) = val {
-                    Ok(acc? $op *n)
-                }else{
-                    return Err("Invalid number arguments".to_string())
-                })?))
-            }else{
-                Ok(Expr::Num($one(*first)))
-            }    
-        }else{
-            Err("Invalid number arguments".to_string())
-        }
-    }};
+    (flags, common_args)
 }
 
 fn main() {
     let repl_env = types::EnvStruct::new(None);
 
-    repl_env.set("+".to_string(), types::func(|v: Vec<Expr>| add_mul_op!(+, 0f64, v)));
-    repl_env.set("*".to_string(), types::func(|v: Vec<Expr>| add_mul_op!(*, 1f64, v)));
-    repl_env.set("-".to_string(), types::func(|v: Vec<Expr>| sub_div_op!(-, Ok(Expr::Num(0.)), |a: f64| -a, v)));
-    repl_env.set("/".to_string(), types::func(|v: Vec<Expr>| sub_div_op!(/, Err("Invalid number argument".to_string()), |a: f64| 1./a, v)));
-    repl_env.set("<".to_string(), types::func(|v: Vec<Expr>| ord_op!(<, v)));
-    repl_env.set(">".to_string(), types::func(|v: Vec<Expr>| ord_op!(>, v)));
-    repl_env.set("<=".to_string(), types::func(|v: Vec<Expr>| ord_op!(<=, v)));
-    repl_env.set(">=".to_string(), types::func(|v: Vec<Expr>| ord_op!(>=, v)));
-    repl_env.set("==".to_string(), types::func(|v: Vec<Expr>| {
-        let left = &v[0]; 
-        for e in v[1..].iter() {
-            if left != e {
-                return Ok(Expr::Nil)
-            }
-        }
-        return Ok(Expr::Sym("t".to_string()))
-    }));
-    repl_env.set("!=".to_string(), types::func(|v: Vec<Expr>| {
-        let left = &v[0]; 
-        for e in v[1..].iter() {
-            if left == e {
-                return Ok(Expr::Nil)
-            }
-        }
-        return Ok(Expr::Sym("t".to_string()))
-    }));
-    repl_env.set("..".to_string(), types::func(|v: Vec<Expr>| {
-        let mut res = String::new();
-        for e in v.iter() {
-            res.push_str(&format!("{}", e))
-        }
-        return Ok(Expr::Str(res));
-    }));
-    repl_env.set("list".to_string(), types::func(|v: Vec<Expr>| Ok( list!(v))));
-    repl_env.set("head".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        match &v[0] {
-            Expr::List(l) => {
-                if l.len() == 0 {
-                    Ok(Expr::Nil)
-                }else{
-                    Ok(l[0].clone())
-                }
-            },
-            Expr::Nil => Ok(Expr::Nil),
-            _ => Err("Value is not a list".to_string()),
-        }
-    } else {
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("tail".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        match &v[0] {
-            Expr::List(l) => {
-                if l.len() == 0 {
-                    Ok(Expr::Nil)
-                }else{
-                    Ok(list!(l[1..].to_vec()))
-                }
-            },
-            Expr::Nil => Ok(Expr::Nil),
-            _ => Err("Value is not a list".to_string()),
-        }
-    } else {
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("cons".to_string(), types::func(|v: Vec<Expr>| if v.len() == 2 {
-        match &v[1] {
-            Expr::List(l) => {
-                if l.len() == 0 {
-                    Ok(list![vec![v[0].clone()]])
-                }else{
-                    let mut new = vec![v[0].clone()];
-                    new.extend_from_slice(&l);
-                    Ok(list![new])
-                }
-            },
-            Expr::Nil => Ok(list![vec![v[0].clone()]]),
-            _ => Err("Can't cons to a non-list".to_string()),
-        }
-    } else {
-        Err("cons require two arguments".to_string())
-    }));
-    repl_env.set("atom?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        if let Expr::List(_) = &v[0] {
-            Ok(Expr::Nil)
-        }else{
-            Ok(Expr::Sym("t".to_string()))
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("list?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        match &v[0] {
-            Expr::List(v) if v.len() != 0 => Ok(Expr::Sym("t".to_string())),
-            Expr::Nil => Ok(Expr::Nil),
-            _ => Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("nil?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        if v[0].is_nil() {
-            Ok(Expr::Sym("t".to_string()))
-        }else{
-            Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Sym("t".to_string()))
-    }));
-    repl_env.set("number?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        if let Expr::Num(_) = &v[0] {
-            Ok(Expr::Sym("t".to_string()))
-        }else{
-            Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("string?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        if let Expr::Str(_) = &v[0] {
-            Ok(Expr::Sym("t".to_string()))
-        }else{
-            Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("symbol?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        if let Expr::Sym(_) = &v[0] {
-            Ok(Expr::Sym("t".to_string()))
-        }else{
-            Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("function?".to_string(), types::func(|v: Vec<Expr>| if v.len() != 0 {
-        match &v[0] {
-            Expr::Func{ .. } => Ok(Expr::Sym("t".to_string())),
-            Expr::NatFunc(_) => Ok(Expr::Sym("t".to_string())),
-            _ => Ok(Expr::Nil)
-        }
-    }else{
-        Ok(Expr::Nil)
-    }));
-    repl_env.set("apply".to_string(), types::func(|v: Vec<Expr>| {
-        let len = v.len();
-        if len < 2 {
-            return Err("apply requires two or more arguments".to_string())
-        }
-        let mut args = v[1..len-1].to_vec();
-        
-        if let Expr::List(rest) = v[len-1].clone() {
-            args.extend_from_slice(&rest);
-            v[0].apply(args)
-        }else{
-            Err("last argument must be a list".to_string())
-        }
-    }));
-    repl_env.set("map".to_string(), types::func(|v: Vec<Expr>| {
-        let len = v.len();
-        if len < 2 {
-            return Err("map requires two arguments".to_string())
-        }
-        let func = &v[0];
-        if let Expr::List(seq) = &v[1] {
-            let mut result: Vec<Expr> = vec![];
-            for expr in seq.iter(){
-                result.push(func.apply(vec![expr.clone()])?)
-            }
-            return Ok(list!(result))
-        }else{
-            return Err("second argument must be list".to_string())
-        }
-
-    }));
-    repl_env.set("append".to_string(), types::func(|v: Vec<Expr>| {
-        let mut result: Vec<Expr> = vec![];
-        for seq in v {
-            if let Expr::List(l) = seq {
-                result.extend_from_slice(&l);
-            } else {
-                return Err("arguments must be lists".to_string())
-            }
-        }
-        Ok(list!(result))
-    }));
-    repl_env.set("time-ms".to_string(), types::func(|_v: Vec<Expr>| {
-        Ok(Expr::Num(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as f64))
-    }));
+    for (k, v) in core::ns() {
+        repl_env.set(k.to_string(), v);
+    }
+    repl_env.set("*dir-name*".to_string(), Expr::Str(".".to_string()));
     repl_env.set("nil".to_string(), Expr::Nil);
     repl_env.set("t".to_string(), Expr::Sym("t".to_string()));
     
+    let (flags, args) = arg_parse(env::args());
 
-    println!("Vaterite Lisp - Walle - 2020");
+    match args.len() {
+        1 => {
+            println!("Vaterite Lisp - Walle - 2020");
 
-    loop {
-        print!(">> ");
-        let _ = io::stdout().flush();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).expect("Couldn't read input");
-    
-        let mut tk = parser::Tokenizer::new(input);
-        let tok = tk.next_token().expect("Invalid Syntax");
-        let val = tk.parse_expr(tok).expect("Invalid Syntax");
-        match val {
-            types::Expr::Sym(x) if x == "exit" => break,
-            _ => {
-                match eval(val, repl_env.clone()) {
-                    Ok(e) => println!("{:?}", e),
-                    Err(err) => println!("\x1b[91mError: {}\x1b[0m", err),
+            loop {
+                print!(">> ");
+                let _ = io::stdout().flush();
+                let mut input = String::new();
+                io::stdin().read_line(&mut input).expect("Couldn't read input");
+            
+                let mut tk = parser::Tokenizer::new(input);
+                let tok = match tk.next_token() {
+                    Ok(tok) => tok,
+                    Err(err) => {
+                        println!("Error: {}", err);
+                        continue;
+                    },
+                };
+                let val = match tk.parse_expr(tok) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        println!("Error: {}", err);
+                        continue;
+                    },
+                };
+                match val {
+                    types::Expr::Sym(x) if x == "exit" => break,
+                    _ => {
+                        match eval(val, repl_env.clone()) {
+                            Ok(e) => println!("{:?}", e),
+                            //Err(err) => println!("\x1b[91mError: {}\x1b[0m", err),
+                            Err(err) => unsafe {
+                                if types::USE_COLORS {
+                                    println!("\x1b[91mError: {}\x1b[0m", err)
+                                } else {
+                                    println!("Error: {}", err)
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            println!("Done!");
         }
-    }
+        2 => {
+            let filename = &args[1];
 
-    println!("Done!");
+            repl_env.set("*dir-name*".to_string(), match Path::new(filename).parent() {
+                Some(path) => if let Some(path) = path.to_str() {
+                    Expr::Str(String::from(path))
+                } else {
+                    println!("File path is invalid, it may contain invalid utf-8 characters");
+                    return;
+                }
+                None => {
+                    println!("File path is invalid");
+                    return;
+                }
+            });
+
+            let file = File::open(filename);
+
+            let mut contents = String::from("(block ");
+            if let Ok(mut file) = file {
+                match file.read_to_string(&mut contents) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        println!("Error reading file");
+                        return;
+                    }
+                }
+                contents.push_str(")");
+
+                let mut tk = parser::Tokenizer::new(contents);
+                let tok = match tk.next_token() {
+                    Ok(tok) => tok,
+                    Err(err) => {
+                        println!("Error: {}", err);
+                        return;
+                    },
+                };
+                let val = match tk.parse_expr(tok) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        println!("Error: {}", err);
+                        return;
+                    },
+                };
+                match eval(val, repl_env.clone()) {
+                    Ok(e) => if flags & 1 != 0 {println!("{:?}", e)},
+                    //Err(err) => println!("\x1b[91mError: {}\x1b[0m", err),
+                    Err(err) => println!("Error: {}", err),
+                }
+            } else {
+                println!("Couldn't open file");
+            }
+        }
+        _ => println!("Invalid arguments")
+    }
 }
