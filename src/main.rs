@@ -2,7 +2,7 @@
 mod parser;
 mod types;
 mod core;
-use types::{Expr, Env};
+use types::{Value, Env, ValueList, ValueErr};
 use std::io;
 use std::io::Write;
 use std::rc::Rc;
@@ -13,21 +13,21 @@ use std::env;
 use std::path::Path;
 
 /// Quasiquote macro
-fn quasiquote(ast: Expr) -> Expr {
+fn quasiquote(ast: Value) -> Value {
     match ast {
-        Expr::Sym(_) => list![Expr::Sym("quote".to_string()), ast],
-        Expr::List(list) if list.len() > 0 => {
+        Value::Sym(_) => list![Value::Sym("quote".to_string()), ast],
+        Value::List(list) if list.len() > 0 => {
             let head = &list[0];
             match head {
-                Expr::Sym(s) if s == "unquote" => return if list.len() > 1 { list[1].clone() } else { Expr::Nil },
-                Expr::List(l) if l.len() > 0 => match &l[0] {
-                    Expr::Sym(s) if s == "unquote-splicing" => return list![
-                        Expr::Sym("append".to_string()),
+                Value::Sym(s) if s == "unquote" => return if list.len() > 1 { list[1].clone() } else { Value::Nil },
+                Value::List(l) if l.len() > 0 => match &l[0] {
+                    Value::Sym(s) if s == "unquote-splicing" => return list![
+                        Value::Sym("append".to_string()),
                         
                         if  l.len() > 1 {
                             l[1].clone()
                         } else {
-                            Expr::Nil
+                            Value::Nil
                         },
                         quasiquote(list!(list[1..].to_vec()))
                     ],
@@ -38,33 +38,33 @@ fn quasiquote(ast: Expr) -> Expr {
             let car = quasiquote(head.clone());
             let cdr = quasiquote(list!(list[1..].to_vec()));
             if cdr.is_nil() {
-                return list![Expr::Sym("list".to_string()), car]
+                return list![Value::Sym("list".to_string()), car]
             }
             
-            if let Expr::List(l) = &cdr {
+            if let Value::List(l) = &cdr {
                 return match &l[0] {
-                    Expr::Sym(s) if s == "list" => {
-                        let mut start = vec![Expr::Sym("list".to_string()), car];
+                    Value::Sym(s) if s == "list" => {
+                        let mut start = vec![Value::Sym("list".to_string()), car];
                         start.extend_from_slice(&l[1..]);
                         list!(start)
                     }
-                    _ => list![Expr::Sym("cons".to_string()), car, cdr]
+                    _ => list![Value::Sym("cons".to_string()), car, cdr]
                 }
             }
 
-            return list![Expr::Sym("cons".to_string()), car, cdr]
+            return list![Value::Sym("cons".to_string()), car, cdr]
         }
         _ => ast
     }
 }
 
 /// Tests if a list is a macro call
-fn is_macro_call(ast: Expr, env: Env) -> bool {
+fn is_macro_call(ast: Value, env: Env) -> bool {
     match ast {
-        Expr::List(l) if l.len() > 0 => if let Expr::Sym(sym) = &l[0] {
+        Value::List(l) if l.len() > 0 => if let Value::Sym(sym) = &l[0] {
             match env.get(sym.clone()) {
                 Ok(e) => match e {
-                    Expr::Func{ is_macro, .. } => return is_macro,
+                    Value::Func{ is_macro, .. } => return is_macro,
                     _ => false
                 }
                 Err(_) => false
@@ -77,23 +77,23 @@ fn is_macro_call(ast: Expr, env: Env) -> bool {
 }
 
 /// Try to expand an ast as a macro call, if isn't return the original ast
-fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
+fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueErr) {
     let mut was_expanded = false;
     while is_macro_call(ast.clone(), env.clone()) {
-        if let Expr::List(l) = &ast { 
-            if let Expr::Sym(s) = &l[0] {
+        if let Value::List(l) = &ast { 
+            if let Value::Sym(s) = &l[0] {
                 let makro = if let Ok(name) = env.get(s.clone()) {
                     name
                 }else{
                     return (false, Err("Macro not defined".to_string()));
                 };
 
-                if let Expr::Func { 
+                if let Value::Func { 
                     ref opt_params, ref has_kwargs, ref rest_param, 
                     env: ref menv, ref params, ast: ref mast, ref eval, .. 
                 } = makro {
                     let args = l[1..].to_vec();
-                    let params = if let Expr::List(l) = &**params {
+                    let params = if let Value::List(l) = &**params {
                         l
                     }else{
                         unreachable!();
@@ -119,24 +119,24 @@ fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
 }
 
 /// Evaluates the ast
-fn eval_ast(ast: &Expr, env: &Env) -> Result<Expr, String> {
+fn eval_ast(ast: &Value, env: &Env) -> ValueErr {
     match ast {
-        Expr::Sym(sym) => env.get(sym.clone()),
-        Expr::List(v) =>  {
-            let mut lst: Vec<Expr> = vec![];
+        Value::Sym(sym) => env.get(sym.clone()),
+        Value::List(v) =>  {
+            let mut lst: ValueList = vec![];
             for expr in v.iter() {
                 lst.push(eval(expr.clone(), env.clone())?)
             }
-            Ok(Expr::List(Rc::new(lst)))
+            Ok(Value::List(Rc::new(lst)))
         }
         _ => Ok(ast.clone())
     }
 }
 
 /// Produces an lambda list from an vaterite lambda list
-fn from_lambda_list(list: Vec<Expr>) -> Result<(Expr, Vec<(String, Expr)>, bool, Option<String>), &'static str> {
-    let mut req: Vec<Expr> = vec![];
-    let mut opt: Vec<(String, Expr)> = vec![];
+fn from_lambda_list(list: ValueList) -> Result<(Value, Vec<(String, Value)>, bool, Option<String>), &'static str> {
+    let mut req: ValueList = vec![];
+    let mut opt: Vec<(String, Value)> = vec![];
     let mut keys = false;
     let mut rest: Option<String> = None;
 
@@ -146,33 +146,33 @@ fn from_lambda_list(list: Vec<Expr>) -> Result<(Expr, Vec<(String, Expr)>, bool,
         match state {
             0 => {
                 match &expr {
-                    Expr::Sym(s) if s == "&rest" => {
-                        rest = Some(if let Expr::Sym(rest_sym) = &list[i + 1] { 
+                    Value::Sym(s) if s == "&rest" => {
+                        rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
                             rest_sym.clone()
                         }else {
                             return Err("Rest parameter is not a symbol")
                         });
                         break;
                     },
-                    Expr::Sym(s) if s == "&opt" => state = 1,
-                    Expr::Sym(s) if s == "&key" => {state = 1; keys = true},
-                    Expr::Sym(_) => req.push(expr.clone()),
+                    Value::Sym(s) if s == "&opt" => state = 1,
+                    Value::Sym(s) if s == "&key" => {state = 1; keys = true},
+                    Value::Sym(_) => req.push(expr.clone()),
                     _ => return Err("Required parameter is not a symbol")
                 }
             }
             1 => {
                 match &expr {
-                    Expr::Sym(s) if s == "&rest" => {
-                        rest = Some(if let Expr::Sym(rest_sym) = &list[i + 1] { 
+                    Value::Sym(s) if s == "&rest" => {
+                        rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
                             rest_sym.clone()
                         }else {
                             return Err("Rest parameter is not a symbol")
                         });
                         break;
                     },
-                    Expr::Sym(s) => opt.push((s.clone(), Expr::Nil)),
-                    Expr::List(l) if l.len() == 2 => {
-                        if let Expr::Sym(s) = &l[0] {
+                    Value::Sym(s) => opt.push((s.clone(), Value::Nil)),
+                    Value::List(l) if l.len() == 2 => {
+                        if let Value::Sym(s) = &l[0] {
                             opt.push((s.clone(), l[1].clone()))
                         } else {
                             return Err("Parameter pair bind is not a symbol")
@@ -188,14 +188,14 @@ fn from_lambda_list(list: Vec<Expr>) -> Result<(Expr, Vec<(String, Expr)>, bool,
 }
 
 /// Evaluate an expression
-fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
-    let ret: Result<Expr, String>;
+fn eval(mut ast: Value, mut env: Env) -> ValueErr {
+    let ret: ValueErr;
 
     'tco: loop {
         ret = match ast.clone() {
-            Expr::List(l) => {
+            Value::List(l) => {
                 if l.len() == 0 {
-                    return Ok(Expr::Nil);
+                    return Ok(Value::Nil);
                 }
 
                 match macro_expand(ast.clone(), env.clone()) {
@@ -210,21 +210,21 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
     
                 let head = &l[0];
                 match head {
-                    Expr::Sym(sym) if sym == "quote" => 
+                    Value::Sym(sym) if sym == "quote" => 
                         if l.len() < 1 {
                             Err("quote form requires 1 argument".to_string())
                         }else{
                             Ok(l[1].clone())
                         }
-                    Expr::Sym(sym) if sym == "quasiquote" => 
+                    Value::Sym(sym) if sym == "quasiquote" => 
                         if l.len() < 1 {
                             Err("quasiquote form requires 1 argument".to_string())
                         }else{
                             ast = quasiquote(l[1].clone());
                             continue 'tco;
                         }
-                    Expr::Sym(sym) if sym == "macro-expand" => macro_expand(l[1].clone(), env.clone()).1,
-                    Expr::Sym(sym) if sym == "bench" =>
+                    Value::Sym(sym) if sym == "macro-expand" => macro_expand(l[1].clone(), env.clone()).1,
+                    Value::Sym(sym) if sym == "bench" =>
                         if l.len() < 1 {
                             Err("bench form requires 1 argument".to_string())
                         }else{
@@ -233,7 +233,7 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             println!("{} μs", now.elapsed().as_micros());
                             expr
                         }
-                    Expr::Sym(sym) if sym == "if" => 
+                    Value::Sym(sym) if sym == "if" => 
                         if l.len() < 4 {
                             Err("if form requires 3 arguments".to_string())
                         }else if eval(l[1].clone(), env.clone())?.is_nil() {
@@ -243,17 +243,17 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             ast = l[2].clone();
                             continue 'tco;
                         }
-                    Expr::Sym(sym) if sym == "cond" => {
-                        let mut res: Result<Expr, String> = Ok(Expr::Nil);
+                    Value::Sym(sym) if sym == "cond" => {
+                        let mut res: ValueErr = Ok(Value::Nil);
                         for cond in l[1..].iter() {
-                            res = if let Expr::List(l) = cond {
+                            res = if let Value::List(l) = cond {
                                 if l.len() < 2 {
                                     Err("condition must be a pair".to_string())
                                 }else if !eval(l[0].clone(), env.clone())?.is_nil() {
                                     ast = l[1].clone();
                                     continue 'tco;
                                 }else{
-                                    Ok(Expr::Nil)
+                                    Ok(Value::Nil)
                                 }
                             } else {
                                 Err("condition must be a pair".to_string())
@@ -261,8 +261,8 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         };
                         res
                     }
-                    Expr::Sym(sym) if sym == "and" => {
-                        let mut res: Result<Expr, String> = Ok(Expr::Sym("t".to_string()));
+                    Value::Sym(sym) if sym == "and" => {
+                        let mut res: ValueErr = Ok(Value::Sym("t".to_string()));
                         for cond in l[1..].iter() {
                             let expr = eval(cond.clone(), env.clone())?;
                             if expr.is_nil() {
@@ -272,8 +272,8 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         };
                         res
                     }
-                    Expr::Sym(sym) if sym == "or" => {
-                        let mut res: Result<Expr, String> = Ok(Expr::Nil);
+                    Value::Sym(sym) if sym == "or" => {
+                        let mut res: ValueErr = Ok(Value::Nil);
                         for cond in l[1..].iter() {
                             let expr = eval(cond.clone(), env.clone())?;
                             if !expr.is_nil() {
@@ -283,69 +283,71 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         };
                         res
                     }
-                    Expr::Sym(sym) if sym == "def" => 
+                    Value::Sym(sym) if sym == "def" => 
                         if l.len() < 3 {
                             Err("def form requires 2 arguments".to_string())
-                        } else if let Expr::Sym(s) = &l[1] {
+                        } else if let Value::Sym(s) = &l[1] {
                             env.set(s.clone(), eval(l[2].clone(), env.clone())?);
-                            Ok(Expr::Nil)
+                            Ok(Value::Nil)
                         } else {
                             Err("Binding name must be a symbol".to_string())
                         }
-                    Expr::Sym(sym) if sym == "fun" =>
+                    Value::Sym(sym) if sym == "fun" =>
                         if l.len() < 3 {
                             Err("def form requires 3 arguments".to_string())
-                        } else if let Expr::Sym(s) = &l[1] {
-                            if let Expr::List(_) = &l[2] {
-                                let func = Expr::Func{
+                        } else if let Value::Sym(s) = &l[1] {
+                            if let Value::List(params) = &l[2] {
+                                let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
+                                let func = Value::Func{
                                     eval,
                                     is_macro: false,
-                                    params: Rc::new(l[2].clone()),
-                                    opt_params: Rc::new(vec![]),
-                                    has_kwargs: false,
+                                    params: Rc::new(req),
+                                    opt_params: Rc::new(opt),
+                                    has_kwargs: key,
+                                    rest_param: if let Some(s) = rest { Some(Rc::new(s)) } else { None },
                                     ast: Rc::new(l[3].clone()),
-                                    rest_param: None,
                                     env: env.clone()
                                 };
                                 env.set(s.clone(), func);
-                                Ok(Expr::Nil)
+                                Ok(Value::Nil)
                             } else {
                                 Err("Lambda list must be a list".to_string())
                             }
                         } else {
                             Err("Binding name must be a symbol".to_string())
                         }
-                    Expr::Sym(sym) if sym == "defmacro" =>
+                    Value::Sym(sym) if sym == "defmacro" =>
                         if l.len() < 3 {
                             Err("defmacro form requires 3 arguments".to_string())
-                        } else if let Expr::Sym(s) = &l[1] {
-                            if let Expr::List(_) = &l[2] {
-                                let func = Expr::Func{
+                        } else if let Value::Sym(s) = &l[1] {
+                            if let Value::List(params) = &l[2] {
+                                let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
+                                let func = Value::Func{
                                     eval,
                                     is_macro: true,
-                                    params: Rc::new(l[2].clone()),
-                                    opt_params: Rc::new(vec![]),
-                                    has_kwargs: false,
-                                    rest_param: None,
+                                    params: Rc::new(req),
+                                    opt_params: Rc::new(opt),
+                                    has_kwargs: key,
+                                    rest_param: if let Some(s) = rest { Some(Rc::new(s)) } else { None },
                                     ast: Rc::new(l[3].clone()),
                                     env: env.clone()
                                 };
                                 env.set(s.clone(), func);
-                                Ok(Expr::Nil)
+                                Ok(Value::Nil)
                             } else {
                                 Err("Lambda list must be a list".to_string())
                             }
                         } else {
                             Err("Binding name must be a symbol".to_string())
                         }
-                    Expr::Sym(sym) if sym == "fn" => 
+                    Value::Sym(sym) if sym == "fn" => 
                         if l.len() < 3 {
                             Err("fn form requires 2 arguments".to_string())
-                        } else if let Expr::List(params) = &l[1] {
-                            let mut body = vec![Expr::Sym("block".to_string())];
+                        } else if let Value::List(params) = &l[1] {
+                            let mut body = vec![Value::Sym("block".to_string())];
                             body.extend_from_slice(&l[2..]);
                             let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
-                            Ok(Expr::Func{
+                            Ok(Value::Func{
                                 eval,
                                 is_macro: false,
                                 params: Rc::new(req),
@@ -358,18 +360,18 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         } else {
                             Err("Lambda list must be a list".to_string())
                         }
-                    Expr::Sym(sym) if sym == "let" => {
+                    Value::Sym(sym) if sym == "let" => {
                         if l.len() < 3 {
                             Err("let form requires 2 arguments".to_string())
-                        } else if let Expr::List(binds) = &l[1] {
+                        } else if let Value::List(binds) = &l[1] {
                             let local_env = types::EnvStruct::new(Some(env.clone()));
                             for pair in binds.iter() {
                                 match pair {
-                                    Expr::List(p) => {
+                                    Value::List(p) => {
                                         if p.len() < 2 {
                                             return Err("Binding must be a pair".to_string())
                                         }
-                                        if let Expr::Sym(name) = &p[0] {
+                                        if let Value::Sym(name) = &p[0] {
                                             local_env.set(name.clone(), eval(p[1].clone(), local_env.clone())?)
                                         }
                                     }
@@ -383,10 +385,10 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             Err("Binding list must be a list".to_string())
                         }
                     }
-                    Expr::Sym(sym) if sym == "block" => {
+                    Value::Sym(sym) if sym == "block" => {
                         let len = l.len();
                         if len == 1 {
-                            return Ok(Expr::Nil);
+                            return Ok(Value::Nil);
                         }
 
                         for expr in l[1..len-1].iter() {
@@ -395,7 +397,7 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         ast = l[len-1].clone();
                         continue 'tco;
                     }
-                    Expr::Sym(ref sym) if sym == "eval" => {
+                    Value::Sym(ref sym) if sym == "eval" => {
                         ast = eval(l[1].clone(), env.clone())?;
                         while let Some(ref e) = env.clone().access {
                             env = e.clone();
@@ -403,20 +405,20 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         continue 'tco;
                     }
                     _ => match ast {
-                        Expr::List(v) =>  {
-                            let mut list: Vec<Expr> = vec![];
+                        Value::List(v) =>  {
+                            let mut list: Vec<Value> = vec![];
                             for expr in v.iter() {
                                 list.push(eval(expr.clone(), env.clone())?)
                             }
                             let ref func = list[0].clone();
                             let args = list[1..].to_vec();
                             match func {
-                                Expr::NatFunc(f) => f(args),
-                                Expr::Func{
+                                Value::NatFunc(f) => f(args),
+                                Value::Func{
                                     ast: fast, params, opt_params, has_kwargs, rest_param, env: fenv, eval, ..
                                 } => {
                                     let a = &**fast;
-                                    if let Expr::List(l) = &**params {
+                                    if let Value::List(l) = &**params {
                                         let binds = (l.clone(), opt_params.clone(), has_kwargs.clone(), rest_param.clone());
                                         let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, *eval)?;
                                         ast = a.clone();
@@ -461,9 +463,9 @@ fn main() {
     for (k, v) in core::ns() {
         repl_env.set(k.to_string(), v);
     }
-    repl_env.set("*dir-name*".to_string(), Expr::Str(".".to_string()));
-    repl_env.set("nil".to_string(), Expr::Nil);
-    repl_env.set("t".to_string(), Expr::Sym("t".to_string()));
+    repl_env.set("*dir-name*".to_string(), Value::Str(".".to_string()));
+    repl_env.set("nil".to_string(), Value::Nil);
+    repl_env.set("t".to_string(), Value::Sym("t".to_string()));
     
     let (flags, args) = arg_parse(env::args());
 
@@ -477,7 +479,7 @@ fn main() {
                 let mut input = String::new();
                 io::stdin().read_line(&mut input).expect("Couldn't read input");
             
-                let mut tk = parser::Tokenizer::new(input);
+                let mut tk = parser::Reader::new(input);
                 let tok = match tk.next_token() {
                     Ok(tok) => tok,
                     Err(err) => {
@@ -498,7 +500,7 @@ fn main() {
                     },
                 };
                 match val {
-                    types::Expr::Sym(x) if x == "exit" => break,
+                    Value::Sym(x) if x == "exit" => break,
                     _ => {
                         match eval(val, repl_env.clone()) {
                             Ok(e) => println!("{:?}", e),
@@ -520,7 +522,7 @@ fn main() {
 
             repl_env.set("*dir-name*".to_string(), match Path::new(filename).parent() {
                 Some(path) => if let Some(path) = path.to_str() {
-                    Expr::Str(String::from(path))
+                    Value::Str(String::from(path))
                 } else {
                     println!("File path is invalid, it may contain invalid utf-8 characters");
                     return;
@@ -544,7 +546,7 @@ fn main() {
                 }
                 contents.push_str(")");
 
-                let mut tk = parser::Tokenizer::new(contents);
+                let mut tk = parser::Reader::new(contents);
                 let tok = match tk.next_token() {
                     Ok(tok) => tok,
                     Err(err) => {

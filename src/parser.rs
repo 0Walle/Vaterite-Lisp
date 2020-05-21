@@ -1,4 +1,4 @@
-use crate::types::{Expr, ExprList};
+use crate::types::{Value, ValueList, ValueErr};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 use std::rc::Rc;
@@ -6,11 +6,11 @@ use std::rc::Rc;
 #[macro_export]
 macro_rules! list {
     ( $arg:expr ) => {
-        Expr::List(Rc::new($arg))
+        Value::List(Rc::new($arg))
     };
     [ $($args:expr),* ] => {{
-        let vec: Vec<Expr> = vec![$($args),*];
-        Expr::List(Rc::new(vec))
+        let vec: Vec<Value> = vec![$($args),*];
+        Value::List(Rc::new(vec))
     }}
 }
 
@@ -33,7 +33,7 @@ pub enum Token {
 }
 
 /// The tokenizer reads an input and produces expressions
-pub struct Tokenizer {
+pub struct Reader {
     chars: Peekable<IntoIter<char>>,
     current_line: i32,
 }
@@ -44,10 +44,10 @@ pub struct Tokenizer {
 //     line: i32,
 // }
 
-impl Tokenizer {
+impl Reader {
     /// Create a new Tokenizer from a source string
     pub fn new(source: String) -> Self {
-        Tokenizer{
+        Reader{
             chars: source.chars().collect::<Vec<char>>().into_iter().peekable(),
             current_line: 1,
         }
@@ -181,31 +181,31 @@ impl Tokenizer {
     }
 
     /// Parse an expression from a starting token
-    pub fn parse_expr(&mut self, look: Token) -> Result<Expr,String> {
+    pub fn parse_expr(&mut self, look: Token) -> ValueErr {
         match look {
             Token::Lparen => {
-                let mut list_val: ExprList = vec![];
+                let mut list_val: ValueList = vec![];
                 loop{
                     let tok = match self.next_token() {
                         Ok(tok) => tok,
                         Err(err) => return Err(format!("Invalid Syntax: {}", err))
                     };
                     match tok {
-                        Token::Rparen => return Ok(Expr::List(Rc::new(list_val))),
+                        Token::Rparen => return Ok(Value::List(Rc::new(list_val))),
                         Token::Eof => return Err("Invalid Syntax: Unexpected end of input".to_string()),
                         tk => list_val.push(self.parse_expr(tk)?)
                     }
                 }
             },
             Token::Lbrack => {
-                let mut list_val: ExprList = vec![Expr::Sym("list".to_string())];
+                let mut list_val: ValueList = vec![Value::Sym("list".to_string())];
                 loop{
                     let tok = match self.next_token() {
                         Ok(tok) => tok,
                         Err(err) => return Err(format!("Invalid Syntax: {}", err))
                     };
                     match tok {
-                        Token::Rbrack => return Ok(Expr::List(Rc::new(list_val))),
+                        Token::Rbrack => return Ok(Value::List(Rc::new(list_val))),
                         Token::Eof => return Err("Invalid Syntax: Unexpected end of input".to_string()),
                         tk => list_val.push(self.parse_expr(tk)?)
                     }
@@ -217,7 +217,7 @@ impl Tokenizer {
                     Err(err) => return Err(format!("Invalid Syntax: {}", err))
                 };
                 let val = self.parse_expr(tok)?;
-                Ok(list![Expr::Sym("quote".to_string()), val])
+                Ok(list![Value::Sym("quote".to_string()), val])
             },
             Token::Backquote => {
                 let tok = match self.next_token() {
@@ -225,7 +225,7 @@ impl Tokenizer {
                     Err(err) => return Err(format!("Invalid Syntax: {}", err))
                 };
                 let val = self.parse_expr(tok)?;
-                Ok(list![Expr::Sym("quasiquote".to_string()), val])
+                Ok(list![Value::Sym("quasiquote".to_string()), val])
             },
             Token::Comma => {
                 let tok = match self.next_token() {
@@ -233,7 +233,7 @@ impl Tokenizer {
                     Err(err) => return Err(format!("Invalid Syntax: {}", err))
                 };
                 let val = self.parse_expr(tok)?;
-                Ok(list![Expr::Sym("unquote".to_string()), val])
+                Ok(list![Value::Sym("unquote".to_string()), val])
             }
             Token::CommaAt => {
                 let tok = match self.next_token() {
@@ -241,12 +241,12 @@ impl Tokenizer {
                     Err(err) => return Err(format!("Invalid Syntax: {}", err))
                 };
                 let val = self.parse_expr(tok)?;
-                Ok(list![Expr::Sym("unquote-splicing".to_string()), val])
+                Ok(list![Value::Sym("unquote-splicing".to_string()), val])
             },
-            Token::Number(n) => Ok(Expr::Num(n)),
-            Token::String(s) => Ok(Expr::Str(s)),
-            Token::Symbol(s) => Ok(Expr::Sym(s)),
-            Token::Keyword(s) => Ok(Expr::Keyword(s)),
+            Token::Number(n) => Ok(Value::Num(n)),
+            Token::String(s) => Ok(Value::Str(s)),
+            Token::Symbol(s) => Ok(Value::Sym(s)),
+            Token::Keyword(s) => Ok(Value::Keyword(s)),
             _ => Err("Invalid Syntax: Unexpected Token".to_string())
         }
     }

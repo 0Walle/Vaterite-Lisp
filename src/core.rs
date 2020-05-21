@@ -1,6 +1,6 @@
 use crate::types;
 use crate::parser;
-use types::{Expr, ExprErr, ExprList};
+use types::{Value, ValueErr, ValueList};
 use std::rc::Rc;
 use std::time::{SystemTime};
 use std::fs::File;
@@ -9,29 +9,29 @@ use std::io::Read;
 macro_rules! ord_op {
     ($op:tt, $v:expr) => {{
         let mut left = match &$v[0] {
-            Expr::Num(n) => *n,
+            Value::Num(n) => *n,
             _ => return Err("Invalid number arguments".to_string())
         };
         for e in $v[1..].iter() {
-            if let Expr::Num(n) = e {
+            if let Value::Num(n) = e {
                 if left $op *n {
                     left = *n;
                     continue
                 }else{
-                    return Ok(Expr::Nil)
+                    return Ok(Value::Nil)
                 }
             }else{
                 return Err("Invalid number arguments".to_string())
             }
         }
-        return Ok(Expr::Sym("t".to_string()))
+        return Ok(Value::Sym("t".to_string()))
     }};
 }
 
 macro_rules! add_mul_op {
     ($op:tt, $init:expr, $args:expr) => {
-        Ok(Expr::Num(
-            $args.iter().fold(Ok($init), |acc, val| if let Expr::Num(n) = val {
+        Ok(Value::Num(
+            $args.iter().fold(Ok($init), |acc, val| if let Value::Num(n) = val {
                 Ok(acc? $op *n)
             }else{
                 return Err("Invalid number arguments".to_string())
@@ -44,15 +44,15 @@ macro_rules! sub_div_op {
     ($op:tt, $none:expr, $one:expr, $args:expr) => {{
         if $args.len() == 0 {
             $none
-        }else if let Expr::Num(first) = &$args[0]{
+        }else if let Value::Num(first) = &$args[0]{
             if $args.len() > 1 {
-                Ok(Expr::Num($args[1..].iter().fold(Ok(first.clone()), |acc, val| if let Expr::Num(n) = val {
+                Ok(Value::Num($args[1..].iter().fold(Ok(first.clone()), |acc, val| if let Value::Num(n) = val {
                     Ok(acc? $op *n)
                 }else{
                     return Err("Invalid number arguments".to_string())
                 })?))
             }else{
-                Ok(Expr::Num($one(*first)))
+                Ok(Value::Num($one(*first)))
             }    
         }else{
             Err("Invalid number arguments".to_string())
@@ -76,52 +76,52 @@ macro_rules! predicate_op {
                 _ => $fail
             }
         } else {
-            Ok(Expr::Nil)
+            Ok(Value::Nil)
         }
     };
 }
 
-fn operator_eq(v: ExprList) -> ExprErr {
+fn operator_eq(v: ValueList) -> ValueErr {
     let left = &v[0]; 
     for e in v[1..].iter() {
         if left != e {
-            return Ok(Expr::Nil)
+            return Ok(Value::Nil)
         }
     }
-    return Ok(Expr::Sym("t".to_string()))
+    return Ok(Value::Sym("t".to_string()))
 }
 
-fn operator_ne(v: ExprList) -> ExprErr {
+fn operator_ne(v: ValueList) -> ValueErr {
     let left = &v[0]; 
     for e in v[1..].iter() {
         if left == e {
-            return Ok(Expr::Nil)
+            return Ok(Value::Nil)
         }
     }
-    return Ok(Expr::Sym("t".to_string()))
+    return Ok(Value::Sym("t".to_string()))
 }
 
-fn operator_str(v: ExprList) -> ExprErr {
+fn operator_str(v: ValueList) -> ValueErr {
     let mut res = String::new();
     for e in v.iter() {
         res.push_str(&format!("{}", e))
     }
-    return Ok(Expr::Str(res));
+    return Ok(Value::Str(res));
 }
 
-fn operator_head(v: ExprList) -> ExprErr {
+fn operator_head(v: ValueList) -> ValueErr {
     n_args! { v;
-        0 => Ok(Expr::Nil),
+        0 => Ok(Value::Nil),
         1 => {
             match &v[0] {
-                Expr::List(l) => {
+                Value::List(l) => {
                     if l.len() == 0 {
-                        Ok(Expr::Nil)
+                        Ok(Value::Nil)
                     }else{
                         Ok(l[0].clone())
                     }
                 },
-                Expr::Nil => Ok(Expr::Nil),
+                Value::Nil => Ok(Value::Nil),
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -129,26 +129,26 @@ fn operator_head(v: ExprList) -> ExprErr {
     }
 }
 
-fn operator_nth(v: ExprList) -> ExprErr {
+fn operator_nth(v: ValueList) -> ValueErr {
     n_args! { v;
         2 => {
             let n = match &v[1] {
-                Expr::Num(n) => *n as usize,
+                Value::Num(n) => *n as usize,
                 _ => return Err("Value is not a number".to_string()),
             };
 
             match &v[0] {
-                Expr::List(l) => {
+                Value::List(l) => {
                     if l.len() == 0 {
-                        Ok(Expr::Nil)
+                        Ok(Value::Nil)
                     }else{
                         Ok(match l.get(n) {
                             Some(expr) => expr.clone(),
-                            None => Expr::Nil
+                            None => Value::Nil
                         })
                     }
                 },
-                Expr::Nil => Ok(Expr::Nil),
+                Value::Nil => Ok(Value::Nil),
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -156,19 +156,19 @@ fn operator_nth(v: ExprList) -> ExprErr {
     }
 }
 
-fn operator_tail(v: ExprList) -> ExprErr {
+fn operator_tail(v: ValueList) -> ValueErr {
     n_args! { v;
-        0 => Ok(Expr::Nil),
+        0 => Ok(Value::Nil),
         1 => {
             match &v[0] {
-                Expr::List(l) => {
+                Value::List(l) => {
                     if l.len() == 0 {
-                        Ok(Expr::Nil)
+                        Ok(Value::Nil)
                     }else{
                         Ok(list!(l[1..].to_vec()))
                     }
                 },
-                Expr::Nil => Ok(Expr::Nil),
+                Value::Nil => Ok(Value::Nil),
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -176,11 +176,11 @@ fn operator_tail(v: ExprList) -> ExprErr {
     }
 }
 
-fn operator_cons(v: ExprList) -> ExprErr {
+fn operator_cons(v: ValueList) -> ValueErr {
     n_args! { v;
         2 => {
             match &v[1] {
-                Expr::List(l) => {
+                Value::List(l) => {
                     if l.len() == 0 {
                         Ok(list![vec![v[0].clone()]])
                     }else{
@@ -189,7 +189,7 @@ fn operator_cons(v: ExprList) -> ExprErr {
                         Ok(list![new])
                     }
                 },
-                Expr::Nil => Ok(list![vec![v[0].clone()]]),
+                Value::Nil => Ok(list![vec![v[0].clone()]]),
                 _ => Err("Can't cons to a non-list".to_string()),
             }
         },
@@ -197,72 +197,72 @@ fn operator_cons(v: ExprList) -> ExprErr {
     }
 }
 
-fn pred_atom(v: ExprList) -> ExprErr {
+fn pred_atom(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::List(l) => if l.len() > 0 { Ok(Expr::Nil) } else { Ok(Expr::Sym("t".to_string())) };
-        Ok(Expr::Sym("t".to_string()))
+        Value::List(l) => if l.len() > 0 { Ok(Value::Nil) } else { Ok(Value::Sym("t".to_string())) };
+        Ok(Value::Sym("t".to_string()))
     }
 }
 
-fn pred_list(v: ExprList) -> ExprErr {
+fn pred_list(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::List(l) => if l.len() > 0 { Ok(Expr::Sym("t".to_string())) } else { Ok(Expr::Nil) };
-        Ok(Expr::Nil)
+        Value::List(l) => if l.len() > 0 { Ok(Value::Sym("t".to_string())) } else { Ok(Value::Nil) };
+        Ok(Value::Nil)
     }
 }
 
-fn pred_nil(v: ExprList) -> ExprErr {
+fn pred_nil(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::List(l) => if l.len() > 0 { Ok(Expr::Nil) } else { Ok(Expr::Sym("t".to_string())) },
-        Expr::Nil => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::List(l) => if l.len() > 0 { Ok(Value::Nil) } else { Ok(Value::Sym("t".to_string())) },
+        Value::Nil => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn pred_number(v: ExprList) -> ExprErr {
+fn pred_number(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::Num(_) => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::Num(_) => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn pred_string(v: ExprList) -> ExprErr {
+fn pred_string(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::Str(_) => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::Str(_) => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn pred_symbol(v: ExprList) -> ExprErr {
+fn pred_symbol(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::Sym(_) => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::Sym(_) => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn pred_keyword(v: ExprList) -> ExprErr {
+fn pred_keyword(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::Keyword(_) => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::Keyword(_) => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn pred_function(v: ExprList) -> ExprErr {
+fn pred_function(v: ValueList) -> ValueErr {
     predicate_op! {v;
-        Expr::Func{ .. } => Ok(Expr::Sym("t".to_string())),
-        Expr::NatFunc(_) => Ok(Expr::Sym("t".to_string()));
-        Ok(Expr::Nil)
+        Value::Func{ .. } => Ok(Value::Sym("t".to_string())),
+        Value::NatFunc(_) => Ok(Value::Sym("t".to_string()));
+        Ok(Value::Nil)
     }
 }
 
-fn core_apply(v: ExprList) -> ExprErr {
+fn core_apply(v: ValueList) -> ValueErr {
     let len = v.len();
     if len < 2 {
         return Err("apply requires two or more arguments".to_string())
     }
     let mut args = v[1..len-1].to_vec();
     
-    if let Expr::List(rest) = v[len-1].clone() {
+    if let Value::List(rest) = v[len-1].clone() {
         args.extend_from_slice(&rest);
         v[0].apply(args)
     }else{
@@ -270,14 +270,14 @@ fn core_apply(v: ExprList) -> ExprErr {
     }
 }
 
-fn core_map(v: ExprList) -> ExprErr {
+fn core_map(v: ValueList) -> ValueErr {
     let len = v.len();
     if len < 2 {
         return Err("map requires two arguments".to_string())
     }
     let func = &v[0];
-    if let Expr::List(seq) = &v[1] {
-        let mut result: Vec<Expr> = vec![];
+    if let Value::List(seq) = &v[1] {
+        let mut result: Vec<Value> = vec![];
         for expr in seq.iter(){
             result.push(func.apply(vec![expr.clone()])?)
         }
@@ -287,10 +287,10 @@ fn core_map(v: ExprList) -> ExprErr {
     }
 }
 
-fn core_append(v: ExprList) -> ExprErr {
-    let mut result: Vec<Expr> = vec![];
+fn core_append(v: ValueList) -> ValueErr {
+    let mut result: Vec<Value> = vec![];
     for seq in v {
-        if let Expr::List(l) = seq {
+        if let Value::List(l) = seq {
             result.extend_from_slice(&l);
         } else {
             return Err("arguments must be lists".to_string())
@@ -299,32 +299,32 @@ fn core_append(v: ExprList) -> ExprErr {
     Ok(list!(result))
 }
 
-fn core_time_ms(_v: ExprList) -> ExprErr {
-    Ok(Expr::Num(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as f64))
+fn core_time_ms(_v: ValueList) -> ValueErr {
+    Ok(Value::Num(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as f64))
 }
 
-fn core_println(v: ExprList) -> ExprErr {
+fn core_println(v: ValueList) -> ValueErr {
     for expr in v {
         println!("{}", expr);
     }
-    Ok(Expr::Nil)
+    Ok(Value::Nil)
 }
 
-fn core_print(v: ExprList) -> ExprErr {
+fn core_print(v: ValueList) -> ValueErr {
     for expr in v {
         print!("{}", expr);
     }
-    Ok(Expr::Nil)
+    Ok(Value::Nil)
 }
 
-fn operator_len(v: ExprList) -> ExprErr {
+fn operator_len(v: ValueList) -> ValueErr {
     n_args! { v;
-        0 => Ok(Expr::Nil),
+        0 => Ok(Value::Nil),
         1 => {
             match &v[0] {
-                Expr::List(l) => Ok(Expr::Num(l.len() as f64)),
-                Expr::Str(s) => Ok(Expr::Num(s.len() as f64)),
-                Expr::Nil => Ok(Expr::Num(0f64)),
+                Value::List(l) => Ok(Value::Num(l.len() as f64)),
+                Value::Str(s) => Ok(Value::Num(s.len() as f64)),
+                Value::Nil => Ok(Value::Num(0f64)),
                 _ => Err("This value is not countable".to_string()),
             }
         },
@@ -332,13 +332,13 @@ fn operator_len(v: ExprList) -> ExprErr {
     }
 }
 
-fn core_read(v: ExprList) -> ExprErr {
+fn core_read(v: ValueList) -> ValueErr {
     if v.len() == 0 {
         return Err("read requires one argument".to_string())
     }
 
-    if let Expr::Str(input) = v[0].clone(){
-        let mut tk = parser::Tokenizer::new(input);
+    if let Value::Str(input) = v[0].clone(){
+        let mut tk = parser::Reader::new(input);
         if let Ok(tok) = tk.next_token() {
             tk.parse_expr(tok)
         }else{
@@ -349,15 +349,15 @@ fn core_read(v: ExprList) -> ExprErr {
     }
 }
 
-fn core_read_file(v: ExprList) -> ExprErr {
+fn core_read_file(v: ValueList) -> ValueErr {
     let file = File::open(match &v[0] {
-        Expr::Str(s) => s,
+        Value::Str(s) => s,
         _ => return Err("Filename must be an string".to_string())
     });
     let mut contents = String::new();
     if let Ok(mut file) = file {
         match file.read_to_string(&mut contents) {
-            Ok(_) => Ok(Expr::Str(contents)),
+            Ok(_) => Ok(Value::Str(contents)),
             Err(err) => Err(format!("Couldn't read file: {:?}", err))
         }
         
@@ -366,11 +366,11 @@ fn core_read_file(v: ExprList) -> ExprErr {
     }
 }
 
-fn operator_inc(v: ExprList) -> ExprErr {
+fn operator_inc(v: ValueList) -> ValueErr {
     n_args! { v;
         1 => {
             match &v[0] {
-                Expr::Num(n) => Ok(Expr::Num(*n + 1f64)),
+                Value::Num(n) => Ok(Value::Num(*n + 1f64)),
                 _ => Err("Value is not a number".to_string()),
             }
         },
@@ -378,11 +378,11 @@ fn operator_inc(v: ExprList) -> ExprErr {
     }
 }
 
-fn operator_dec(v: ExprList) -> ExprErr {
+fn operator_dec(v: ValueList) -> ValueErr {
     n_args! { v;
         1 => {
             match &v[0] {
-                Expr::Num(n) => Ok(Expr::Num(*n - 1f64)),
+                Value::Num(n) => Ok(Value::Num(*n - 1f64)),
                 _ => Err("Value is not a number".to_string()),
             }
         },
@@ -390,30 +390,30 @@ fn operator_dec(v: ExprList) -> ExprErr {
     }
 }
 
-pub fn ns() -> Vec<(&'static str, Expr)>{
+pub fn ns() -> Vec<(&'static str, Value)>{
     vec![
-        ("+", types::func(|v: Vec<Expr>| add_mul_op!(+, 0f64, v))),
-        ("*", types::func(|v: Vec<Expr>| add_mul_op!(*, 1f64, v))),
-        ("-", types::func(|v: Vec<Expr>| sub_div_op!(-, Ok(Expr::Num(0.)), |a: f64| -a, v))),
-        ("/", types::func(|v: Vec<Expr>| sub_div_op!(/, Err("Invalid number argument".to_string()), |a: f64| 1./a, v))),
-        ("<", types::func(|v: Vec<Expr>| ord_op!(<, v))),
-        (">", types::func(|v: Vec<Expr>| ord_op!(>, v))),
-        ("<=", types::func(|v: Vec<Expr>| ord_op!(<=, v))),
-        (">=", types::func(|v: Vec<Expr>| ord_op!(>=, v))),
+        ("+", types::func(|v: Vec<Value>| add_mul_op!(+, 0f64, v))),
+        ("*", types::func(|v: Vec<Value>| add_mul_op!(*, 1f64, v))),
+        ("-", types::func(|v: Vec<Value>| sub_div_op!(-, Ok(Value::Num(0.)), |a: f64| -a, v))),
+        ("/", types::func(|v: Vec<Value>| sub_div_op!(/, Err("Invalid number argument".to_string()), |a: f64| 1./a, v))),
+        ("<", types::func(|v: Vec<Value>| ord_op!(<, v))),
+        (">", types::func(|v: Vec<Value>| ord_op!(>, v))),
+        ("<=", types::func(|v: Vec<Value>| ord_op!(<=, v))),
+        (">=", types::func(|v: Vec<Value>| ord_op!(>=, v))),
         ("==", types::func(operator_eq)),
         ("!=", types::func(operator_ne)),
         ("str", types::func(operator_str)),
-        ("list", types::func(|v: Vec<Expr>| Ok(list!(v)))),
+        ("list", types::func(|v: Vec<Value>| Ok(list!(v)))),
         ("first", types::func(operator_head)),
-        ("second", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(1f64)]))),
-        ("third", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(2f64)]))),
-        ("fouth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(3f64)]))),
-        ("fifth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(4f64)]))),
-        ("sixth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(5f64)]))),
-        ("seventh", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
-        ("eigth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
-        ("nineth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
-        ("tenth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
+        ("second", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(1f64)]))),
+        ("third", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(2f64)]))),
+        ("fouth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(3f64)]))),
+        ("fifth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(4f64)]))),
+        ("sixth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(5f64)]))),
+        ("seventh", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(6f64)]))),
+        ("eigth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(6f64)]))),
+        ("nineth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(6f64)]))),
+        ("tenth", types::func(|v: Vec<Value>| operator_nth(vec![v.get(0).unwrap_or(&Value::Nil).clone(), Value::Num(6f64)]))),
         ("nth", types::func(operator_nth)),
         ("head", types::func(operator_head)),
         ("tail", types::func(operator_tail)),

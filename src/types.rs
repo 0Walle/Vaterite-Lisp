@@ -6,7 +6,7 @@ pub static mut USE_COLORS: bool = false;
 
 /// Enum for the types used by vaterite
 #[derive(Clone)]
-pub enum Expr {
+pub enum Value {
     /// Nil value represents an empty list
     Nil,
     /// Number value is 64 bit float
@@ -18,31 +18,34 @@ pub enum Expr {
     /// Keyword value, like symbols that evaluate to themselves
     Keyword(String),
     /// List value, the basic container of vaterite
-    List(Rc<Vec<Expr>>),
+    List(Rc<Vec<Value>>),
     /// Native function are used to define functions in rust that can be used in vaterite
-    NatFunc(fn(Vec<Expr>) -> Result<Expr, String>),
+    NatFunc(fn(Vec<Value>) -> Result<Value, String>),
     /// Vaterite function, defined by vaterite code
     Func {
-        eval: fn(Expr, Env) -> Result<Expr, String>,
-        ast: Rc<Expr>,
+        eval: fn(Value, Env) -> Result<Value, String>,
+        ast: Rc<Value>,
         env: Env,
-        params: Rc<Expr>,
-        opt_params: Rc<Vec<(String, Expr)>>,
+        params: Rc<Value>,
+        opt_params: Rc<Vec<(String, Value)>>,
         has_kwargs: bool,
         rest_param: Option<Rc<String>>,
         is_macro: bool,
     }
 }
 
-impl std::fmt::Display for Expr {
+pub type ValueList = Vec<Value>;
+pub type ValueErr = Result<Value, String>;
+
+impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Expr::Nil => write!(f, "()"),
-            Expr::Num(n) => write!(f, "{}", n),
-            Expr::Str(s) => write!(f, "{}", s),
-            Expr::Keyword(s) => write!(f, "{}", s),
-            Expr::Sym(s) => write!(f, "{}", s),
-            Expr::List(list) => {
+            Value::Nil => write!(f, "()"),
+            Value::Num(n) => write!(f, "{}", n),
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Keyword(s) => write!(f, "{}", s),
+            Value::Sym(s) => write!(f, "{}", s),
+            Value::List(list) => {
                 f.write_str("(")?;
                 let mut it = list.iter();
                 match it.next() {
@@ -55,34 +58,34 @@ impl std::fmt::Display for Expr {
                 f.write_str(")")?;
                 Ok(())
             },
-            Expr::NatFunc(_) => write!(f, "[Function]"),
-            Expr::Func { .. } => write!(f, "[Lambda]"),
+            Value::NatFunc(_) => write!(f, "[Function]"),
+            Value::Func { .. } => write!(f, "[Lambda]"),
         }
     }
 }
 
-impl std::fmt::Debug for Expr {
+impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         unsafe {
             match self {
-                Expr::Nil => write!(f, "()"),
-                Expr::Num(n) => if USE_COLORS { 
+                Value::Nil => write!(f, "()"),
+                Value::Num(n) => if USE_COLORS { 
                     write!(f, "\x1b[93m{}\x1b[0m", n)
                 }else{
                     write!(f, "{}", n)
                 }
-                Expr::Str(s) => if USE_COLORS {
+                Value::Str(s) => if USE_COLORS {
                     write!(f, "\x1b[32m\"{}\"\x1b[0m", s)
                 } else {
                     write!(f, "\"{}\"", s)
                 }
-                Expr::Sym(s) => write!(f, "{}", s),
-                Expr::Keyword(s) => if USE_COLORS {
+                Value::Sym(s) => write!(f, "{}", s),
+                Value::Keyword(s) => if USE_COLORS {
                     write!(f, "\x1b[34m:{}\x1b[0m", s)
                 } else {
                     write!(f, ":{}", s)
                 }
-                Expr::List(list) => {
+                Value::List(list) => {
                     f.write_str("(")?;
                     let mut it = list.iter();
                     match it.next() {
@@ -95,12 +98,12 @@ impl std::fmt::Debug for Expr {
                     f.write_str(")")?;
                     Ok(())
                 },
-                Expr::NatFunc(_) => if USE_COLORS {
+                Value::NatFunc(_) => if USE_COLORS {
                     write!(f, "\x1b[36m[Function]\x1b[0m")
                 } else {
                     write!(f, "[Function]")
                 }
-                Expr::Func { .. } => if USE_COLORS {
+                Value::Func { .. } => if USE_COLORS {
                     write!(f, "\x1b[36m[Lambda]\x1b[0m")
                 } else {
                     write!(f, "[Lambda]")
@@ -110,9 +113,9 @@ impl std::fmt::Debug for Expr {
     }
 }
 
-impl PartialEq for Expr {
-    fn eq(&self, other: &Expr) -> bool {
-        use Expr::*;
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        use Value::*;
         match (self, other) {
             (Nil, Nil) => true,
             (Num(ref a), Num(ref b)) => a == b,
@@ -126,17 +129,17 @@ impl PartialEq for Expr {
     }
 }
 
-impl Expr {
+impl Value {
     /// Apply arguments to a vaterite expression that must be a function
-    pub fn apply(&self, args: Vec<Expr>) -> Result<Expr, String>{
+    pub fn apply(&self, args: ValueList) -> ValueErr {
         match self {
-            Expr::NatFunc(f) => Ok(f(args)?),
-            Expr::Func{
+            Value::NatFunc(f) => Ok(f(args)?),
+            Value::Func{
                 params, opt_params, has_kwargs, rest_param, 
                 eval, ast, env, ..
             } => {
                 let a = &**ast;
-                if let Expr::List(l) = &**params {
+                if let Value::List(l) = &**params {
                     let binds = (l.clone(), opt_params.clone(), has_kwargs.clone(), rest_param.clone());
                     let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval)?;
                     return Ok(eval(a.clone(), local_env)?)
@@ -150,22 +153,22 @@ impl Expr {
 
     pub fn is_nil(&self) -> bool {
         match self {
-            Expr::Nil => true,
-            Expr::List(l) => l.len() == 0,
+            Value::Nil => true,
+            Value::List(l) => l.len() == 0,
             _ => false,
         }
     }
 }
 
 /// Helper to make native functions
-pub fn func(f: fn(Vec<Expr>) -> Result<Expr, String>) -> Expr {
-    Expr::NatFunc(f)
+pub fn func(f: fn(ValueList) -> ValueErr) -> Value {
+    Value::NatFunc(f)
 }
 
 /// An vaterite environment maps expressions to strings
 #[derive(Debug, Clone)]
 pub struct EnvStruct {
-    data: RefCell<HashMap<String, Expr>>,
+    data: RefCell<HashMap<String, Value>>,
     pub access: Option<Env>,
 }
 
@@ -178,7 +181,7 @@ impl EnvStruct {
     }
 
     /// Creates a new environment and bind values acordingly to a lambda list
-    pub fn bind(access: Option<Env>, binds: (Rc<Vec<Expr>>, Rc<Vec<(String, Expr)>>, bool, Option<Rc<String>>), exprs: Vec<Expr>, eval: fn(Expr, Env) -> ExprErr) -> Result<Env, String> {
+    pub fn bind(access: Option<Env>, binds: (Rc<Vec<Value>>, Rc<Vec<(String, Value)>>, bool, Option<Rc<String>>), exprs: ValueList, eval: fn(Value, Env) -> ValueErr) -> Result<Env, String> {
         let env = EnvStruct::new(access);
         let (req, opt, keys, rest) = binds;
         let req_len = req.len();
@@ -189,7 +192,7 @@ impl EnvStruct {
         }
         for (i, b) in req.iter().enumerate() {
             match b {
-                Expr::Sym(s) => {
+                Value::Sym(s) => {
                     env.set(s.clone(), exprs[i].clone());
                 }
                 _ => {
@@ -206,7 +209,7 @@ impl EnvStruct {
             'next_key: for (_, b) in opt.iter().enumerate() {
                 let key = &b.0;
                 for i in (0..exprs.len()).step_by(2) {
-                    if let Expr::Keyword(kw) = &exprs[i] {
+                    if let Value::Keyword(kw) = &exprs[i] {
                         if key == kw {
                             env.set(key.clone(), exprs[i + 1].clone());
                             continue 'next_key;
@@ -231,14 +234,14 @@ impl EnvStruct {
             if exprs.len() > opt_len {
                 env.set((*rest).clone(), list!(exprs[opt_len..].to_vec()));
             } else {
-                env.set((*rest).clone(), Expr::Nil);
+                env.set((*rest).clone(), Value::Nil);
             }
         };
         Ok(env)
     }
 
     /// Get an binding from the environment
-    pub fn get(&self, key: String) -> Result<Expr, String>{
+    pub fn get(&self, key: String) -> ValueErr {
         match self.data.borrow().get(&key) {
             Some(e) => Ok(e.clone()),
             None => {
@@ -255,11 +258,9 @@ impl EnvStruct {
     }
 
     /// Set an binding to the environment
-    pub fn set(&self, key: String, value: Expr){
+    pub fn set(&self, key: String, value: Value){
         self.data.borrow_mut().insert(key, value);
     }
 }
 
 pub type Env = Rc<EnvStruct>;
-pub type ExprList = Vec<Expr>;
-pub type ExprErr = Result<Expr, String>;
