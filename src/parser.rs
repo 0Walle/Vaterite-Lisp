@@ -14,6 +14,7 @@ macro_rules! list {
     }}
 }
 
+/// Vaterite tokens
 #[derive(Debug)]
 pub enum Token {
     Eof,
@@ -31,27 +32,28 @@ pub enum Token {
     String(String),
 }
 
+/// The tokenizer reads an input and produces expressions
 pub struct Tokenizer {
-    //source: String,
     chars: Peekable<IntoIter<char>>,
     current_line: i32,
 }
 
+// TODO
 // struct ReaderError {
 //     err: String,
 //     line: i32,
 // }
 
 impl Tokenizer {
-
+    /// Create a new Tokenizer from a source string
     pub fn new(source: String) -> Self {
         Tokenizer{
-            //source: source,
             chars: source.chars().collect::<Vec<char>>().into_iter().peekable(),
             current_line: 1,
         }
     }
 
+    /// Read the next Token in the stream
     pub fn next_token(&mut self) -> Result<Token, &str> {
         loop{
             let ch = self.chars.next();
@@ -178,6 +180,7 @@ impl Tokenizer {
         }
     }
 
+    /// Parse an expression from a starting token
     pub fn parse_expr(&mut self, look: Token) -> Result<Expr,String> {
         match look {
             Token::Lparen => {

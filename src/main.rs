@@ -12,6 +12,7 @@ use std::io::prelude::*;
 use std::env;
 use std::path::Path;
 
+/// Quasiquote macro
 fn quasiquote(ast: Expr) -> Expr {
     match ast {
         Expr::Sym(_) => list![Expr::Sym("quote".to_string()), ast],
@@ -57,6 +58,7 @@ fn quasiquote(ast: Expr) -> Expr {
     }
 }
 
+/// Tests if a list is a macro call
 fn is_macro_call(ast: Expr, env: Env) -> bool {
     match ast {
         Expr::List(l) if l.len() > 0 => if let Expr::Sym(sym) = &l[0] {
@@ -74,6 +76,7 @@ fn is_macro_call(ast: Expr, env: Env) -> bool {
     }
 }
 
+/// Try to expand an ast as a macro call, if isn't return the original ast
 fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
     let mut was_expanded = false;
     while is_macro_call(ast.clone(), env.clone()) {
@@ -85,7 +88,10 @@ fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
                     return (false, Err("Macro not defined".to_string()));
                 };
 
-                if let Expr::Func { env: ref menv, ref params, ast: ref mast, .. } = makro {
+                if let Expr::Func { 
+                    ref opt_params, ref has_kwargs, ref rest_param, 
+                    env: ref menv, ref params, ast: ref mast, ref eval, .. 
+                } = makro {
                     let args = l[1..].to_vec();
                     let params = if let Expr::List(l) = &**params {
                         l
@@ -93,7 +99,8 @@ fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
                         unreachable!();
                     };
 
-                    let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), params.clone(), args){
+                    let binds = (params.clone(), opt_params.clone(), has_kwargs.clone(), rest_param.clone());
+                    let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), binds, args, *eval){
                         Ok(scope) => scope,
                         Err(err) => return (false, Err(err))
                     };
@@ -111,6 +118,7 @@ fn macro_expand(mut ast: Expr, mut env: Env) -> (bool,Result<Expr, String>) {
     (was_expanded,Ok(ast))
 }
 
+/// Evaluates the ast
 fn eval_ast(ast: &Expr, env: &Env) -> Result<Expr, String> {
     match ast {
         Expr::Sym(sym) => env.get(sym.clone()),
@@ -125,6 +133,61 @@ fn eval_ast(ast: &Expr, env: &Env) -> Result<Expr, String> {
     }
 }
 
+/// Produces an lambda list from an vaterite lambda list
+fn from_lambda_list(list: Vec<Expr>) -> Result<(Expr, Vec<(String, Expr)>, bool, Option<String>), &'static str> {
+    let mut req: Vec<Expr> = vec![];
+    let mut opt: Vec<(String, Expr)> = vec![];
+    let mut keys = false;
+    let mut rest: Option<String> = None;
+
+    let mut state = 0;
+
+    for (i, expr) in list.iter().enumerate() {
+        match state {
+            0 => {
+                match &expr {
+                    Expr::Sym(s) if s == "&rest" => {
+                        rest = Some(if let Expr::Sym(rest_sym) = &list[i + 1] { 
+                            rest_sym.clone()
+                        }else {
+                            return Err("Rest parameter is not a symbol")
+                        });
+                        break;
+                    },
+                    Expr::Sym(s) if s == "&opt" => state = 1,
+                    Expr::Sym(s) if s == "&key" => {state = 1; keys = true},
+                    Expr::Sym(_) => req.push(expr.clone()),
+                    _ => return Err("Required parameter is not a symbol")
+                }
+            }
+            1 => {
+                match &expr {
+                    Expr::Sym(s) if s == "&rest" => {
+                        rest = Some(if let Expr::Sym(rest_sym) = &list[i + 1] { 
+                            rest_sym.clone()
+                        }else {
+                            return Err("Rest parameter is not a symbol")
+                        });
+                        break;
+                    },
+                    Expr::Sym(s) => opt.push((s.clone(), Expr::Nil)),
+                    Expr::List(l) if l.len() == 2 => {
+                        if let Expr::Sym(s) = &l[0] {
+                            opt.push((s.clone(), l[1].clone()))
+                        } else {
+                            return Err("Parameter pair bind is not a symbol")
+                        }
+                    }
+                    _ => return Err("Optional/keyword parameter is not a symbol or pair")
+                }
+            }
+            _ => break
+        }
+    };
+    Ok((list!(req), opt, keys, rest))
+}
+
+/// Evaluate an expression
 fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
     let ret: Result<Expr, String>;
 
@@ -174,11 +237,9 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                         if l.len() < 4 {
                             Err("if form requires 3 arguments".to_string())
                         }else if eval(l[1].clone(), env.clone())?.is_nil() {
-                            //eval(l[3].clone(), env.clone())
                             ast = l[3].clone();
                             continue 'tco;
                         } else {
-                            //eval(l[2].clone(), env.clone())
                             ast = l[2].clone();
                             continue 'tco;
                         }
@@ -210,7 +271,6 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             }
                         };
                         res
-                        //return Ok(Expr::Sym("t".to_string()))
                     }
                     Expr::Sym(sym) if sym == "or" => {
                         let mut res: Result<Expr, String> = Ok(Expr::Nil);
@@ -222,7 +282,6 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             }
                         };
                         res
-                        //return Ok(Expr::Nil)
                     }
                     Expr::Sym(sym) if sym == "def" => 
                         if l.len() < 3 {
@@ -242,7 +301,10 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                                     eval,
                                     is_macro: false,
                                     params: Rc::new(l[2].clone()),
+                                    opt_params: Rc::new(vec![]),
+                                    has_kwargs: false,
                                     ast: Rc::new(l[3].clone()),
+                                    rest_param: None,
                                     env: env.clone()
                                 };
                                 env.set(s.clone(), func);
@@ -262,6 +324,9 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                                     eval,
                                     is_macro: true,
                                     params: Rc::new(l[2].clone()),
+                                    opt_params: Rc::new(vec![]),
+                                    has_kwargs: false,
+                                    rest_param: None,
                                     ast: Rc::new(l[3].clone()),
                                     env: env.clone()
                                 };
@@ -276,13 +341,17 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                     Expr::Sym(sym) if sym == "fn" => 
                         if l.len() < 3 {
                             Err("fn form requires 2 arguments".to_string())
-                        } else if let Expr::List(_) = &l[1] {
+                        } else if let Expr::List(params) = &l[1] {
                             let mut body = vec![Expr::Sym("block".to_string())];
                             body.extend_from_slice(&l[2..]);
+                            let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
                             Ok(Expr::Func{
                                 eval,
                                 is_macro: false,
-                                params: Rc::new(l[1].clone()),
+                                params: Rc::new(req),
+                                opt_params: Rc::new(opt),
+                                has_kwargs: key,
+                                rest_param: if let Some(s) = rest { Some(Rc::new(s)) } else { None },
                                 ast: Rc::new(list!(body)),
                                 env: env.clone()
                             })
@@ -307,7 +376,6 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                                     _ => return Err("Binding must be a pair".to_string())
                                 }
                             }
-                            //return eval(l[2].clone(), local_env.clone())
                             ast = l[2].clone();
                             env = local_env.clone();
                             continue 'tco
@@ -317,10 +385,13 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                     }
                     Expr::Sym(sym) if sym == "block" => {
                         let len = l.len();
+                        if len == 1 {
+                            return Ok(Expr::Nil);
+                        }
+
                         for expr in l[1..len-1].iter() {
                             eval(expr.clone(), env.clone())?;
                         };
-                        //eval(l[len].clone(), env.clone())
                         ast = l[len-1].clone();
                         continue 'tco;
                     }
@@ -342,13 +413,12 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                             match func {
                                 Expr::NatFunc(f) => f(args),
                                 Expr::Func{
-                                    ast: fast, params, env: fenv, ..
+                                    ast: fast, params, opt_params, has_kwargs, rest_param, env: fenv, eval, ..
                                 } => {
                                     let a = &**fast;
                                     if let Expr::List(l) = &**params {
-                                        //l.clone()
-                                        let local_env = types::EnvStruct::bind(Some(fenv.clone()), l.clone(), args)?;
-                                        //return Ok(eval(a.clone(), local_env)?)
+                                        let binds = (l.clone(), opt_params.clone(), has_kwargs.clone(), rest_param.clone());
+                                        let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, *eval)?;
                                         ast = a.clone();
                                         env = local_env.clone();
                                         continue 'tco;
@@ -358,7 +428,6 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
                                 },
                                 _ => Err("Attempt to call non-function".to_string()),
                             }
-                            //Ok(Expr::List(Rc::new(lst)))
                         }
                         _ => Err("Expected a list".to_string())
                     }
@@ -372,11 +441,7 @@ fn eval(mut ast: Expr, mut env: Env) -> Result<Expr, String> {
 }
 
 fn arg_parse(mut args: env::Args) -> (u8, Vec<String>) {
-    /*
-        0b0000
-          ||||
-          |||+- print last file expression
-    */
+    // more flags can be added later
     let mut flags = 0b0001;
     let mut common_args = vec![];
     while let Some(arg) = args.next() {
@@ -392,6 +457,7 @@ fn arg_parse(mut args: env::Args) -> (u8, Vec<String>) {
 fn main() {
     let repl_env = types::EnvStruct::new(None);
 
+    // add functions from core to the environment
     for (k, v) in core::ns() {
         repl_env.set(k.to_string(), v);
     }
@@ -419,6 +485,11 @@ fn main() {
                         continue;
                     },
                 };
+
+                if let parser::Token::Eof = tok {
+                    continue;
+                }
+
                 let val = match tk.parse_expr(tok) {
                     Ok(val) => val,
                     Err(err) => {
@@ -431,7 +502,6 @@ fn main() {
                     _ => {
                         match eval(val, repl_env.clone()) {
                             Ok(e) => println!("{:?}", e),
-                            //Err(err) => println!("\x1b[91mError: {}\x1b[0m", err),
                             Err(err) => unsafe {
                                 if types::USE_COLORS {
                                     println!("\x1b[91mError: {}\x1b[0m", err)
@@ -482,6 +552,11 @@ fn main() {
                         return;
                     },
                 };
+
+                if let parser::Token::Eof = tok {
+                    return;
+                }
+
                 let val = match tk.parse_expr(tok) {
                     Ok(val) => val,
                     Err(err) => {
@@ -491,7 +566,6 @@ fn main() {
                 };
                 match eval(val, repl_env.clone()) {
                     Ok(e) => if flags & 1 != 0 {println!("{:?}", e)},
-                    //Err(err) => println!("\x1b[91mError: {}\x1b[0m", err),
                     Err(err) => println!("Error: {}", err),
                 }
             } else {

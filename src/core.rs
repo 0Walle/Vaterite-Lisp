@@ -129,6 +129,33 @@ fn operator_head(v: ExprList) -> ExprErr {
     }
 }
 
+fn operator_nth(v: ExprList) -> ExprErr {
+    n_args! { v;
+        2 => {
+            let n = match &v[1] {
+                Expr::Num(n) => *n as usize,
+                _ => return Err("Value is not a number".to_string()),
+            };
+
+            match &v[0] {
+                Expr::List(l) => {
+                    if l.len() == 0 {
+                        Ok(Expr::Nil)
+                    }else{
+                        Ok(match l.get(n) {
+                            Some(expr) => expr.clone(),
+                            None => Expr::Nil
+                        })
+                    }
+                },
+                Expr::Nil => Ok(Expr::Nil),
+                _ => Err("Value is not a list".to_string()),
+            }
+        },
+        _ => Err("nth requires two arguments".to_string())
+    }
+}
+
 fn operator_tail(v: ExprList) -> ExprErr {
     n_args! { v;
         0 => Ok(Expr::Nil),
@@ -377,6 +404,17 @@ pub fn ns() -> Vec<(&'static str, Expr)>{
         ("!=", types::func(operator_ne)),
         ("str", types::func(operator_str)),
         ("list", types::func(|v: Vec<Expr>| Ok(list!(v)))),
+        ("first", types::func(operator_head)),
+        ("second", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(1f64)]))),
+        ("third", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(2f64)]))),
+        ("fouth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(3f64)]))),
+        ("fifth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(4f64)]))),
+        ("sixth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(5f64)]))),
+        ("seventh", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
+        ("eigth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
+        ("nineth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
+        ("tenth", types::func(|v: Vec<Expr>| operator_nth(vec![v.get(0).unwrap_or(&Expr::Nil).clone(), Expr::Num(6f64)]))),
+        ("nth", types::func(operator_nth)),
         ("head", types::func(operator_head)),
         ("tail", types::func(operator_tail)),
         ("cons", types::func(operator_cons)),
