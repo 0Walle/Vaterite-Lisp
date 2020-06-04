@@ -24,6 +24,7 @@ pub enum Token {
     Backquote,
     Comma,
     CommaAt,
+    Tilde,
     Lbrack,
     Rbrack,
     Number(f64),
@@ -82,30 +83,28 @@ impl Reader {
                                 return Ok(Token::Comma)
                             }
                         }
-                        None => return Err("Unexpected end of input"),
+                        None => return Err("Unexpected end of input reading unquote"),
                     }
                     '`' => return Ok(Token::Backquote),
-                    '0' ..= '9' => {
-                        let mut res: String = String::new();
-                        let mut chaar = chr;
-                        loop {
-                            res.push(chaar);
-                            match self.chars.peek() {
-                                Some(c) => {
-                                    if *c >= '0' && *c <= '9' {
-                                        chaar = *c;
-                                        self.chars.next();
-                                    }else if *c == '.'{
-                                        chaar = *c;
-                                        self.chars.next();
-                                    }else{
-                                        break;
-                                    }
-                                }
-                                None => return Err("Unexpected end of input"),
+                    '~' => return Ok(Token::Tilde),
+                    '-' => match self.chars.peek() {
+                        Some(c) => match *c {
+                            '0' ..= '9' => match self.read_number(chr) {
+                                Ok(num) => return Ok(Token::Number(num)),
+                                Err(err) => return Err(err)
+                            }
+                            _ => match self.read_symbol('-') {
+                                Ok(sym) => return Ok(Token::Symbol(sym)),
+                                Err(err) => return Err(err)
                             }
                         }
-                        return Ok(Token::Number(res.parse::<f64>().unwrap()));
+                        None => return Ok(Token::Symbol("-".to_string())),
+                    },
+                    '0' ..= '9' => {
+                        match self.read_number(chr) {
+                            Ok(num) => return Ok(Token::Number(num)),
+                            Err(err) => return Err(err)
+                        }
                     }
                     '"' => {
                         let mut res: String = String::new();
@@ -123,61 +122,80 @@ impl Reader {
                                             '\n' => (),
                                             _ => res.push(c),
                                         }
-                                        None => return Err("Unexpected end of input"),
+                                        None => return Err("Unexpected end of input reading string"),
                                     }
-                                    '\n' => return Err("Unexpected end of input"),
+                                    '\n' => return Err("Unexpected line break reading string"),
                                     c => res.push(c)
                                 }
-                                None => return Err("Unexpected end of input"),
+                                None => return Err("Unexpected end of input reading string"),
                             }
                         }
                         return Ok(Token::String(res));
                     }
                     ':' => {
-                        let mut res: String = String::new();
-                        loop {
-                            match self.chars.peek() {
-                                Some(c) => match *c {
-                                      '0' ..= '9' 
-                                    | 'a' ..= 'z' 
-                                    | 'A' ..= 'Z' 
-                                    | '_' | '$' | ':' | '.' | '?'
-                                    | '<' | '>' | '!' | '='
-                                    | '+' | '-' | '*' | '/' | '%'
-                                    | '&' | '|' | '^' | '~'
-                                      => {res.push(*c);self.chars.next();},
-                                    _ => break,
-                                }
-                                None => break,
-                            }
+                        let chr = match self.chars.next() {
+                            Some(c) => c,
+                            None => return Err("Unexpected end of input reading keyword")
+                        };
+                        match self.read_symbol(chr) {
+                            Ok(sym) => return Ok(Token::Keyword(sym)),
+                            Err(err) => return Err(err)
                         }
-                        return Ok(Token::Keyword(res));
                     }
                     c => {
-                        let mut res: String = String::new();
-                        res.push(c);
-                        loop {
-                            match self.chars.peek() {
-                                Some(c) => match *c {
-                                      '0' ..= '9' 
-                                    | 'a' ..= 'z' 
-                                    | 'A' ..= 'Z' 
-                                    | '_' | '$' | ':' | '.' | '?'
-                                    | '<' | '>' | '!' | '='
-                                    | '+' | '-' | '*' | '/' | '%'
-                                    | '&' | '|' | '^' | '~'
-                                      => {res.push(*c);self.chars.next();},
-                                    _ => break,
-                                }
-                                None => break,
-                            }
+                        match self.read_symbol(c) {
+                            Ok(sym) => return Ok(Token::Symbol(sym)),
+                            Err(err) => return Err(err)
                         }
-                        return Ok(Token::Symbol(res));
                     }
                 }
                 None => return Ok(Token::Eof),
             }
         }
+    }
+
+    fn read_number(&mut self, chr: char) -> Result<f64, &'static str> {
+        let mut res: String = String::new();
+        let mut next_char = chr;
+        loop {
+            res.push(next_char);
+            match self.chars.peek() {
+                Some(c) => match *c {
+                    '0' ..= '9' => {
+                        next_char = *c;
+                        self.chars.next();
+                    }
+                    '.' => {
+                        next_char = *c;
+                        self.chars.next();
+                    }
+                    '\n' | ' ' | '\t' | '\r'
+                    | ',' | ';' | '"' | '`' | '@' | '~' | '\''
+                    | '(' | ')' | '{' | '}' | '[' | ']' => break,
+                    _ => return Err("Unexpected character on number token"),
+                }
+                None => return Err("Unexpected end of input reading number"),
+            }
+        }
+        return Ok(res.parse::<f64>().unwrap());
+    }
+
+    fn read_symbol(&mut self, chr: char) -> Result<String, &'static str> {
+        let mut res: String = String::new();
+        res.push(chr);
+        loop {
+            if let Some(c) = self.chars.peek() {
+                match *c {
+                     '\n' | ' ' | '\t' | '\r'
+                    | ',' | ';' | '"' | '`' | '@' | '~' | '\''
+                    | '(' | ')' | '{' | '}' | '[' | ']' => break,
+                    _ => {res.push(*c);self.chars.next();}
+                }
+            } else {
+                break
+            }
+        } 
+        return Ok(res);
     }
 
     /// Parse an expression from a starting token
@@ -192,7 +210,7 @@ impl Reader {
                     };
                     match tok {
                         Token::Rparen => return Ok(Value::List(Rc::new(list_val))),
-                        Token::Eof => return Err("Invalid Syntax: Unexpected end of input".to_string()),
+                        Token::Eof => return Err("Invalid Syntax: Unexpected end of input reading list".to_string()),
                         tk => list_val.push(self.parse_expr(tk)?)
                     }
                 }
@@ -206,7 +224,7 @@ impl Reader {
                     };
                     match tok {
                         Token::Rbrack => return Ok(Value::List(Rc::new(list_val))),
-                        Token::Eof => return Err("Invalid Syntax: Unexpected end of input".to_string()),
+                        Token::Eof => return Err("Invalid Syntax: Unexpected end of input reading list".to_string()),
                         tk => list_val.push(self.parse_expr(tk)?)
                     }
                 }
@@ -242,6 +260,14 @@ impl Reader {
                 };
                 let val = self.parse_expr(tok)?;
                 Ok(list![Value::Sym("unquote-splicing".to_string()), val])
+            },
+            Token::Tilde => {
+                let tok = match self.next_token() {
+                    Ok(tok) => tok,
+                    Err(err) => return Err(format!("Invalid Syntax: {}", err))
+                };
+                let val = self.parse_expr(tok)?;
+                Ok(list![Value::Sym("deref".to_string()), val])
             },
             Token::Number(n) => Ok(Value::Num(n)),
             Token::String(s) => Ok(Value::Str(s)),

@@ -31,7 +31,17 @@ pub enum Value {
         has_kwargs: bool,
         rest_param: Option<Rc<String>>,
         is_macro: bool,
-    }
+    },
+    /// Box refers to a vaterite value and is mutable
+    Box(Rc<RefCell<Value>>),
+    /// Lazy is used to implement lazy sequences
+    Lazy{
+        env: Env,
+        eval: fn(Value, Env) -> Result<Value, String>,
+        head: Rc<Value>,
+        tail: Rc<Value>
+    },
+    Map(Rc<HashMap<String,Value>>)
 }
 
 pub type ValueList = Vec<Value>;
@@ -60,6 +70,20 @@ impl std::fmt::Display for Value {
             },
             Value::NatFunc(_) => write!(f, "[Function]"),
             Value::Func { .. } => write!(f, "[Lambda]"),
+            Value::Box(val) => write!(f, "{}", val.borrow()),
+            Value::Lazy{head, tail, ..} => write!(f, "(lazy-cons {} {})", head, tail),
+            Value::Map(map) => {
+                f.write_str("(")?;
+                let mut it = map.iter();
+                if let Some((k, v)) = it.next() {
+                    write!(f, ":{} {}", k, v)?;
+                }
+                for (k, v) in it {
+                    write!(f, ", :{} {}", k, v)?;
+                };
+                f.write_str(")")?;
+                Ok(())
+            }
         }
     }
 }
@@ -107,6 +131,16 @@ impl std::fmt::Debug for Value {
                     write!(f, "\x1b[36m[Lambda]\x1b[0m")
                 } else {
                     write!(f, "[Lambda]")
+                }
+                Value::Box(val) => write!(f, "(box {:?})", val.borrow()),
+                Value::Lazy{head, tail, ..} => write!(f, "(lazy-cons {:?} {:?})", head, tail),
+                Value::Map(map) => {
+                    f.write_str("( ")?;
+                    for (k, v) in map.iter() {
+                        write!(f, ":{} {:?} ", k, v)?;
+                    };
+                    f.write_str(")")?;
+                    Ok(())
                 }
             }
         }
@@ -168,7 +202,7 @@ pub fn func(f: fn(ValueList) -> ValueErr) -> Value {
 /// An vaterite environment maps expressions to strings
 #[derive(Debug, Clone)]
 pub struct EnvStruct {
-    data: RefCell<HashMap<String, Value>>,
+    pub data: RefCell<HashMap<String, Value>>,
     pub access: Option<Env>,
 }
 
@@ -260,6 +294,19 @@ impl EnvStruct {
     /// Set an binding to the environment
     pub fn set(&self, key: String, value: Value){
         self.data.borrow_mut().insert(key, value);
+    }
+
+    /// Set an binding to the environment
+    pub fn assign(&self, key: String, value: Value) -> ValueErr{
+        if self.data.borrow().contains_key(&key) {
+            self.data.borrow_mut().insert(key, value).ok_or("Value assign before definition".to_string())
+        } else {
+            if let Some(env) = &self.access {
+                env.assign(key, value)
+            } else {
+                Err(format!("'{}' not found", key))
+            }
+        }
     }
 }
 

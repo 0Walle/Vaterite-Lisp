@@ -2,9 +2,11 @@ use crate::types;
 use crate::parser;
 use types::{Value, ValueErr, ValueList};
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::time::{SystemTime};
 use std::fs::File;
 use std::io::Read;
+use std::collections::HashMap;
 
 macro_rules! ord_op {
     ($op:tt, $v:expr) => {{
@@ -109,7 +111,7 @@ fn operator_str(v: ValueList) -> ValueErr {
     return Ok(Value::Str(res));
 }
 
-fn operator_head(v: ValueList) -> ValueErr {
+pub fn operator_head(v: ValueList) -> ValueErr {
     n_args! { v;
         0 => Ok(Value::Nil),
         1 => {
@@ -122,6 +124,7 @@ fn operator_head(v: ValueList) -> ValueErr {
                     }
                 },
                 Value::Nil => Ok(Value::Nil),
+                Value::Lazy{head, ..} => Ok((**head).clone()),
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -149,6 +152,29 @@ fn operator_nth(v: ValueList) -> ValueErr {
                     }
                 },
                 Value::Nil => Ok(Value::Nil),
+                Value::Lazy{env, eval, tail, head} => {
+                    if n == 0 {
+                        return Ok((&**head).clone());
+                    }
+
+                    let mut count = n;
+                    let mut nth = (**tail).clone();
+                    let mut env = env.clone();
+                    loop {
+                        count -= 1;
+                        match eval(nth, env.clone())? {
+                            Value::Lazy{env: tenv, tail: ttail, head, ..} => {
+                                if count == 0 {
+                                    break Ok((*head).clone())
+                                }else{
+                                    nth = (*ttail).clone();
+                                    env = tenv;
+                                }
+                            }
+                            _ => break Ok(Value::Nil)
+                        }
+                    }
+                },
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -156,7 +182,7 @@ fn operator_nth(v: ValueList) -> ValueErr {
     }
 }
 
-fn operator_tail(v: ValueList) -> ValueErr {
+pub fn operator_tail(v: ValueList) -> ValueErr {
     n_args! { v;
         0 => Ok(Value::Nil),
         1 => {
@@ -169,6 +195,7 @@ fn operator_tail(v: ValueList) -> ValueErr {
                     }
                 },
                 Value::Nil => Ok(Value::Nil),
+                Value::Lazy{env, eval, tail, ..} => eval((**tail).clone(), env.clone()),
                 _ => Err("Value is not a list".to_string()),
             }
         },
@@ -197,6 +224,131 @@ fn operator_cons(v: ValueList) -> ValueErr {
     }
 }
 
+fn core_hashmap(v: ValueList) -> ValueErr {
+    if v.len() % 2 != 0 {
+        return Err("Arguments are not in pairs".to_string());
+    }
+
+    let mut map: HashMap<String, Value> = HashMap::default();
+
+    for i in (0..v.len()).step_by(2) {
+        match &v[i] {
+            Value::Keyword(s) => map.insert(s.clone(), v[i+1].clone()),
+            Value::Str(s) => map.insert(s.clone(), v[i+1].clone()),
+            Value::Sym(s) => map.insert(s.clone(), v[i+1].clone()),
+            _ => return Err("Value can't be used as key".to_string()),
+        };
+    };
+    Ok(Value::Map(Rc::new(map)))
+}
+
+fn operator_assoc(v: ValueList) -> ValueErr {
+    if v.len() < 1 {
+        return Err("assoc requires a map as first argument".to_string());
+    }
+    let mut map = if let Value::Map(hashmap) = &v[0] {
+        (**hashmap).clone()
+    } else {
+        return Err("assoc requires a map as first argument".to_string());
+    };
+
+    let v = &v[1..];
+
+    if v.len() % 2 != 0 {
+        return Err("Arguments are not in pairs".to_string());
+    }
+
+    //let mut map: HashMap<String, Value> = HashMap::default();
+
+    for i in (0..v.len()).step_by(2) {
+        match &v[i] {
+            Value::Keyword(s) => map.insert(s.clone(), v[i+1].clone()),
+            Value::Str(s) => map.insert(s.clone(), v[i+1].clone()),
+            Value::Sym(s) => map.insert(s.clone(), v[i+1].clone()),
+            _ => return Err("Value can't be used as key".to_string()),
+        };
+    };
+    Ok(Value::Map(Rc::new(map)))
+}
+
+fn operator_dissoc(v: ValueList) -> ValueErr {
+    if v.len() < 1 {
+        return Err("dissoc requires a map as first argument".to_string());
+    }
+    let mut map = if let Value::Map(hashmap) = &v[0] {
+        (**hashmap).clone()
+    } else {
+        return Err("dissoc requires a map as first argument".to_string());
+    };
+
+    let v = &v[1..];
+
+    for key in v {
+        match key {
+            Value::Keyword(s) => map.remove(s),
+            Value::Str(s) => map.remove(s),
+            Value::Sym(s) => map.remove(s),
+            _ => return Err("Value can't be used as key".to_string()),
+        };
+    };
+    Ok(Value::Map(Rc::new(map)))
+}
+
+fn operator_map_get(v: ValueList) -> ValueErr {
+    if v.len() < 2 {
+        return Err("get-key requires a map as first argument".to_string());
+    }
+    let map = if let Value::Map(hashmap) = &v[0] {
+        (**hashmap).clone()
+    } else {
+        return Err("get-key requires a map as first argument".to_string());
+    };
+
+    match &v[1] {
+        Value::Keyword(s) | Value::Str(s) | Value::Sym(s) => match map.get(s){
+            Some(v) => Ok(v.clone()),
+            None => Err(format!("Key {} is not present in map", s))
+        },
+        _ => return Err("Value can't be used as key".to_string()),
+    }
+}
+
+fn operator_has_key(v: ValueList) -> ValueErr {
+    if v.len() < 2 {
+        return Err("has-key? requires a map as first argument".to_string());
+    }
+    let map = if let Value::Map(hashmap) = &v[0] {
+        (**hashmap).clone()
+    } else {
+        return Err("has-key? requires a map as first argument".to_string());
+    };
+
+    if match &v[1] {
+        Value::Keyword(s) | Value::Str(s) | Value::Sym(s) => map.contains_key(s),
+        _ => return Err("Value can't be used as key".to_string()),
+    } {
+        return Ok(Value::Sym("t".to_string()));
+    };
+    Ok(Value::Nil)
+}
+
+fn core_map_keys(v: ValueList) -> ValueErr {
+    if v.len() < 1 {
+        return Err("map-keys requires a map as first argument".to_string());
+    }
+    let map = if let Value::Map(hashmap) = &v[0] {
+        (**hashmap).clone()
+    } else {
+        return Err("map-keys requires a map as first argument".to_string());
+    };
+
+    let mut keys: ValueList = vec![];
+    for (k, _) in map {
+        keys.push(Value::Str(k))
+    }
+    Ok(list!(keys))
+}
+
 fn pred_atom(v: ValueList) -> ValueErr {
     predicate_op! {v;
         Value::List(l) => if l.len() > 0 { Ok(Value::Nil) } else { Ok(Value::Sym("t".to_string())) };
@@ -207,6 +359,13 @@ fn pred_atom(v: ValueList) -> ValueErr {
 fn pred_list(v: ValueList) -> ValueErr {
     predicate_op! {v;
         Value::List(l) => if l.len() > 0 { Ok(Value::Sym("t".to_string())) } else { Ok(Value::Nil) };
+        Ok(Value::Nil)
+    }
+}
+
+fn pred_hashmap(v: ValueList) -> ValueErr {
+    predicate_op! {v;
+        Value::Map(_) => Ok(Value::Sym("t".to_string()));
         Ok(Value::Nil)
     }
 }
@@ -292,8 +451,9 @@ fn core_append(v: ValueList) -> ValueErr {
     for seq in v {
         if let Value::List(l) = seq {
             result.extend_from_slice(&l);
+        } else if let Value::Nil = seq {
         } else {
-            return Err("arguments must be lists".to_string())
+            return Err(format!("arguments must be lists, found {:?}", seq))
         }
     }
     Ok(list!(result))
@@ -315,6 +475,10 @@ fn core_print(v: ValueList) -> ValueErr {
         print!("{}", expr);
     }
     Ok(Value::Nil)
+}
+
+fn core_repr(v: ValueList) -> ValueErr {
+    Ok(Value::Str(format!("{:?}", v.get(0).unwrap_or(&Value::Nil))))
 }
 
 fn operator_len(v: ValueList) -> ValueErr {
@@ -390,6 +554,151 @@ fn operator_dec(v: ValueList) -> ValueErr {
     }
 }
 
+fn core_collect(v: ValueList) -> ValueErr {
+    n_args! { v;
+        1 => {
+            match &v[0] {
+                Value::List(_) => Ok(v[0].clone()),
+                Value::Nil => Ok(Value::Nil),
+                Value::Lazy{env, eval, tail, head} => {
+                    let mut collect: ValueList = vec![(**head).clone()];
+                    
+                    let mut nth = (**tail).clone();
+                    let mut env = env.clone();
+                    loop {
+                        match eval(nth, env.clone())? {
+                            Value::Lazy{env: tenv, tail: ttail, head, ..} => {
+                                collect.push((*head).clone());
+                                nth = (*ttail).clone();
+                                env = tenv;
+                            }
+                            _ => break Ok(list!(collect))
+                        }
+                    }
+                }
+                _ => Err("Value is not a list".to_string()),
+            }
+        },
+        _ => Err("collect requires one argument".to_string())
+    }
+}
+
+fn core_format(v: ValueList) -> ValueErr {
+    if v.len() == 0 {
+        return Err("format requires a format string argument".to_string());
+    };
+    if let Value::Str(format) = &v[0] {
+        let mut iter = format.chars().peekable();
+        let mut result = String::new();
+        let mut current = 1;
+        loop {
+            match iter.next() {
+                Some(ch) => match ch {
+                    '{' => match iter.next() {
+                        None => break Err("Invalid syntax in format string".to_string()),
+                        Some(mut ch) => {
+                            let mut debug = false;
+                            if ch == '?' {
+                                debug = true;
+                                ch = match iter.next() {
+                                    Some(ch) => ch,
+                                    None => break Err("Invalid syntax in format string".to_string()),
+                                }
+                            }
+                            match ch {
+                                '}' => {
+                                    match v.get(current) {
+                                        Some(e) => result.push_str(&format!("{}", e)),
+                                        None => break Err("Value expected to format string not found".to_string()),
+                                    };
+                                    current += 1;
+                                }
+                                '@' => {
+                                    let mut sep: Option<char> = None;
+                                    match iter.peek() {
+                                        Some(ch) if *ch == '}' => {},
+                                        Some(ch) => {sep = Some(*ch);iter.next();},
+                                        _ => break Err("Invalid syntax in format string".to_string()),
+                                    }
+                                    match v.get(current) {
+                                        Some(e) => {
+                                            if let Value::List(l) = e {
+                                                let mut it = l.iter();
+                                                if let Some(expr) = it.next() {
+                                                    if debug {
+                                                        result.push_str(&format!("{:?}", expr))
+                                                    }else{
+                                                        result.push_str(&format!("{}", expr))
+                                                    } 
+                                                };
+                                                for expr in it {
+                                                    if let Some(sep) = sep {
+                                                        result.push_str(& if debug {format!("{}{:?}", sep, expr)} else {format!("{}{}", sep, expr)})
+                                                    }else{
+                                                        result.push_str(& if debug {format!("{:?}", expr)} else {format!("{}", expr)})
+                                                    }
+                                                }
+                                            } else {
+                                                break Err("Value expected to slice in format string must be a list".to_string())
+                                            }
+                                        },
+                                        None => break Err("Value expected to format string not found".to_string()),
+                                    };
+                                    current += 1;
+                                    match iter.next() {
+                                        Some(ch) if ch == '}' => (),
+                                        _ => break Err("Invalid syntax in format string".to_string()),
+                                    }
+                                }
+                                '{' => {
+                                    result.push('{')
+                                }
+                                _ => break Err("Invalid syntax in format string".to_string()),
+                            }
+                        }
+                    }
+                    '}' => match iter.next() {
+                        Some(ch) if ch == '}' => result.push('}'),
+                        _ => break Err("Invalid syntax in format string".to_string()),
+                    }
+                    _ => result.push(ch)
+                }
+                None => break Ok(Value::Str(result))
+            }
+        }
+    } else {
+        return Err("format requires a format string argument".to_string());
+    }
+}
+
+fn core_join(v: ValueList) -> ValueErr {
+    if v.len() < 2 {
+        return Err("join requires 2 arguments".to_string());
+    }
+
+    let sep = if let Value::Str(sep) = &v[0] {
+        sep
+    } else {
+        return Err("join requires a string separator".to_string());
+    };
+
+    let mut result = String::new();
+    if let Value::List(list) = &v[1] {
+        let mut it = list.iter();
+        if let Some(x) = it.next() {
+            result.push_str(&format!("{}", x))
+        }
+        for expr in it {
+            result.push_str(&format!("{}{}", sep, expr))
+        }
+        Ok(Value::Str(result))
+    } else if let Value::Nil = &v[1] {
+        Ok(Value::Str("".to_string()))
+    } else {
+        Err("join second argument must be  a list".to_string())
+    }
+}
+
 pub fn ns() -> Vec<(&'static str, Value)>{
     vec![
         ("+", types::func(|v: Vec<Value>| add_mul_op!(+, 0f64, v))),
@@ -426,16 +735,57 @@ pub fn ns() -> Vec<(&'static str, Value)>{
         ("symbol?", types::func(pred_symbol)),
         ("function?", types::func(pred_function)),
         ("keyword?", types::func(pred_keyword)),
+        ("hash-map?", types::func(pred_hashmap)),
         ("apply", types::func(core_apply)),
         ("map", types::func(core_map)),
         ("append", types::func(core_append)),
         ("time-ms", types::func(core_time_ms)),
         ("println", types::func(core_println)),
         ("print", types::func(core_print)),
+        ("repr", types::func(core_repr)),
         ("len", types::func(operator_len)),
         ("read", types::func(core_read)),
         ("read-file", types::func(core_read_file)),
         ("inc", types::func(operator_inc)),
         ("dec", types::func(operator_dec)),
+        ("collect", types::func(core_collect)),
+        ("format", types::func(core_format)),
+        ("join", types::func(core_join)),
+        ("hash-map", types::func(core_hashmap)),
+        ("assoc", types::func(operator_assoc)),
+        ("dissoc", types::func(operator_dissoc)),
+        ("get-key", types::func(operator_map_get)),
+        ("has-key?", types::func(operator_has_key)),
+        ("map-keys", types::func(core_map_keys)),
+        ("box", types::func(|v: Vec<Value>| Ok(Value::Box(Rc::new(RefCell::new(v.get(0).unwrap_or(&Value::Nil).clone())))))),
+        ("set-box", types::func(|v: Vec<Value>| n_args! { v;
+            2 => {
+                match &v[0] {
+                    Value::Box(data) => {*data.borrow_mut() = v[1].clone(); Ok(v[1].clone())},
+                    _ => Err("Value is not a box".to_string()),
+                }
+            },
+            _ => Err("set-box requires 2 arguments".to_string())
+        })),
+        ("swap-box", types::func(|v: Vec<Value>| 
+            if v.len() >= 2 {
+                match &v[0] {
+                    Value::Box(data) => {
+                        let mut args = vec![data.borrow().clone()];
+                        args.extend_from_slice(&v[2..]);
+                        let new_value = v[1].apply(args)?;
+                        *data.borrow_mut() = new_value;
+                        Ok(v[1].clone())
+                    },
+                    _ => Err("Value is not a box".to_string()),
+                }
+            } else {
+                Err("swap requires at least 2 arguments".to_string())
+            }
+        )),
+        ("deref", types::func(|v: Vec<Value>| match v.get(0).unwrap_or(&Value::Nil) {
+            Value::Box(data) => Ok(data.borrow().clone()),
+            _ => Err("Can't deref non box".to_string())
+        })),        
     ]
 }
