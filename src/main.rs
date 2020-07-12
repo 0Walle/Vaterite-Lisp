@@ -115,7 +115,8 @@ fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueResult) {
                     // };
 
                     // let binds = (params.clone(), func.opt_params.clone(), func.has_kwargs.clone(), func.rest_param.clone());
-                    let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
+                    // let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
+                    let binds = &*func;
                     let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), binds, args, eval){
                         Ok(scope) => scope,
                         Err(err) => return (false, Err(err))
@@ -150,7 +151,7 @@ fn eval_ast(ast: &Value, env: &Env) -> ValueResult {
 }
 
 /// Produces an lambda list from an vaterite lambda list
-fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)>, bool, Option<String>), &'static str> {
+fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)>, bool, Option<String>, Arity), String> {
     let mut req: Vec<String> = vec![];
     let mut opt: Vec<(String, Value)> = vec![];
     let mut keys = false;
@@ -166,23 +167,23 @@ fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)
                         rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
                             rest_sym.clone()
                         }else {
-                            return Err("Rest parameter is not a symbol")
+                            return Err("Rest parameter is not a symbol".into())
                         });
                         break;
                     },
                     Value::Keyword(s) if s == "opt" => state = 1,
                     Value::Keyword(s) if s == "key" => {state = 1; keys = true},
                     Value::Sym(s) => req.push(s.clone()),
-                    _ => return Err("Required parameter is not a symbol")
+                    x => return Err(format!("Required parameter is not a symbol, found {:?}", x))
                 }
             }
             1 => {
                 match &expr {
-                    Value::Keyword(s) if s == ":rest" => {
+                    Value::Keyword(s) if s == "rest" => {
                         rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
                             rest_sym.clone()
                         }else {
-                            return Err("Rest parameter is not a symbol")
+                            return Err("Rest parameter is not a symbol".into())
                         });
                         break;
                     },
@@ -191,16 +192,27 @@ fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)
                         if let Value::Sym(s) = &l[0] {
                             opt.push((s.clone(), l[1].clone()))
                         } else {
-                            return Err("Parameter pair bind is not a symbol")
+                            return Err("Parameter pair bind is not a symbol".into())
                         }
                     }
-                    _ => return Err("Optional/keyword parameter is not a symbol or pair")
+                    x => return Err(format!("Optional/keyword parameter is not a symbol or pair, found {:?}", x))
                 }
             }
             _ => break
         }
     };
-    Ok((req.into(), opt, keys, rest))
+    let min = req.len() as u16;
+    let arity = if rest.is_some() {
+        Arity::Min(min)
+    } else {
+        if opt.len() != 0 {
+            Arity::Range(min, opt.len() as u16 * if keys {2} else {1} + min)
+        } else {
+            Arity::Exact(min)
+        }
+    };
+    
+    Ok((req.into(), opt, keys, rest, arity))
 }
 
 fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<String, Value>, String>> {
@@ -664,7 +676,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                     func: Rc::new(FuncData {
                                         params: fields.clone(),
                                         opt_params: vec![], has_kwargs: false, rest_param: None,
-                                        name: name.clone(),
+                                        name: Some(name.clone()),
+                                        arity: Arity::Exact(fields.len() as u16),
                                         ast: ctor.into()
                                     }),
                                 };
@@ -683,7 +696,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                             // params: vater!{(self)},
                                             params: vec!["self".into()],
                                             opt_params: vec![], has_kwargs: false, rest_param: None,
-                                            name: format!("{}-{}", name, field_name),
+                                            name: Some(format!("{}-{}", name, field_name)),
+                                            arity: Arity::Exact(1),
                                             ast: vater!{
                                                 ((sym "index-struct") self (quote (sym name)) [Value::Num(i as f64)])
                                             },
@@ -698,7 +712,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         // params: vater!{(self)},
                                         params: vec!["self".into()],
                                         opt_params: vec![], has_kwargs: false, rest_param: None,
-                                        name: format!("{}?", name),
+                                        name: Some(format!("{}?", name)),
+                                        arity: Arity::Exact(1),
                                         ast: vater!{
                                             ((sym "assert-struct") self (quote (sym name)))
                                         },
@@ -719,7 +734,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             Err(arg_err!("fun"; 3; l.len()))
                         } else if let Value::Sym(s) = &l[1] {
                             if let Some(params) = &l[2].to_vec() {
-                                let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
+                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone())?;
                                 let func = Value::Func{
                                     env: env.clone(),
                                     eval,
@@ -729,7 +744,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         has_kwargs: key,
                                         rest_param: if let Some(s) = rest { Some(s) } else { None },
                                         ast: l[3].clone(),
-                                        name: s.clone(),
+                                        name: Some(s.clone()),
+                                        arity,
                                     }),
                                     is_macro: false,
                                 };
@@ -749,7 +765,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             Err(arg_err!("defmacro"; 3; l.len()))
                         } else if let Value::Sym(s) = &l[1] {
                             if let Some(params) = &l[2].to_vec() {
-                                let (req, opt, key, rest) = from_lambda_list((&**params).clone())?;
+                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone())?;
                                 let func = Value::Func{
                                     env: env.clone(),
                                     eval,
@@ -759,7 +775,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         has_kwargs: key,
                                         rest_param: if let Some(s) = rest { Some(s) } else { None },
                                         ast: l[3].clone(),
-                                        name: s.clone(),
+                                        name: Some(s.clone()),
+                                        arity,
                                     }),
                                     is_macro: true,
                                 };
@@ -780,7 +797,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         } else if let Some(params) = l[1].to_vec() {
                             let mut body = vec![Value::Sym("block".to_string())];
                             body.extend_from_slice(&l[2..]);
-                            let (req, opt, key, rest) = from_lambda_list((&*params).clone())?;
+                            let (req, opt, key, rest, arity) = from_lambda_list((&*params).clone())?;
                             Ok(Value::Func{
                                 env: env.clone(),
                                 eval,
@@ -788,9 +805,10 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                     params: req,
                                     opt_params: opt,
                                     has_kwargs: key,
-                                    rest_param: if let Some(s) = rest { Some(s) } else { None },
+                                    rest_param: rest,
                                     ast: body.into(),
-                                    name: "Lambda".to_string(),
+                                    name: None,
+                                    arity,
                                 }),
                                 // params: Rc::new(req),
                                 // opt_params: Rc::new(opt),
@@ -1061,6 +1079,13 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                                     };
                                                     local_env.set(value.clone(), vater!{ ([name] [Value::Num(got as f64)]) }); "ArityError"
                                                 }
+                                                KwArgErr(name) => {
+                                                    let name = match name {
+                                                        Some(name) => Value::Str(name),
+                                                        None => Value::Nil
+                                                    };
+                                                    local_env.set(value.clone(), vater!{ ([name]) }); "KwargsError"
+                                                }
                                                 TypeErr(ty, got) => {
                                                     local_env.set(value.clone(), vater!{ ([Value::Sym(ty.to_string())] [got.unwrap_or(Value::Nil)]) }); "TypeError"
                                                 }
@@ -1173,7 +1198,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                     func, eval, env: fenv, ..
                                 } => {
                                     let a = &(func).ast;
-                                    let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
+                                    // let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
+                                    let binds = &*func;
                                     let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, *eval)?;
                                     ast = a.clone();
                                     env = local_env.clone();
@@ -1231,7 +1257,7 @@ fn main() {
     // repl_env.set("t".to_string(), Value::Sym("t".to_string()));
 
     eval(vater!{
-        (fun enumerate (seq (sym "&opt") (n 0f64))
+        (fun enumerate (seq (: opt) (n 0f64))
             (if seq ((sym "lazy-cons") (list n (head seq)) (enumerate (tail seq) (inc n))) nil))
     }, repl_env.clone()).unwrap();
 
@@ -1244,7 +1270,7 @@ fn main() {
     }, repl_env.clone()).unwrap();
 
     eval(vater!{
-        (defmacro printf (fmt (sym "&rest") args)
+        (defmacro printf (fmt (: rest) args)
             (quasiquote (println (format (unquote fmt) ((sym "unquote-splicing") args)))))
     }, repl_env.clone()).unwrap();
 

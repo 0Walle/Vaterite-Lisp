@@ -207,7 +207,7 @@ fn operator_rev_cons(v: ValueList) -> ValueResult {
 
 fn core_hashmap(v: ValueList) -> ValueResult {
     if v.len() % 2 != 0 {
-        return Err("Arguments are not in pairs".into());
+        return Err(error::Error::KwArgErr(Some("hash-map".to_string())));
     }
 
     let mut map: HashMap<String, Value> = HashMap::default();
@@ -233,7 +233,7 @@ fn operator_assoc(v: ValueList) -> ValueResult {
     let v = &v[1..];
 
     if v.len() % 2 != 0 {
-        return Err("Arguments are not in pairs".into());
+        return Err(error::Error::KwArgErr(Some("assoc".to_string())));
     }
 
     for i in (0..v.len()).step_by(2) {

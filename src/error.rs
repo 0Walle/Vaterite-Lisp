@@ -4,6 +4,7 @@ use crate::types::{Value, Arity};
 pub enum Error {
     Reason(String),
     ArgErr(Option<String>, Arity, u16),
+    KwArgErr(Option<String>),
     TypeErr(&'static str, Option<Value>),
     BindErr(String),
     Throw(Option<Value>),
@@ -20,6 +21,11 @@ impl std::fmt::Debug for Error {
         match &self {
             Error::Reason(s) => write!(f, "{}", s),
             Error::BindErr(s) => write!(f, "name {} not found", s),
+            Error::KwArgErr(name) => if let Some(name) = name {
+                write!(f, "Keyword arguments are not in pairs calling {}", name)
+            } else {
+                write!(f, "Keyword arguments are not in pairs")
+            }
             Error::ArgErr(name, arity, got) => if let Some(name) = name {
                 write!(f, "{} expected {} but got {}", name, arity, got)
             } else {

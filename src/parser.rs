@@ -48,6 +48,7 @@ pub enum Token {
     True,
     False,
     Number(f64),
+    Char(char),
     Symbol(String),
     Keyword(String),
     String(String),
@@ -208,17 +209,17 @@ impl Reader {
                                     let chr = match self.chars.next() {
                                         Some(ch) => match ch {
                                             '\\' => match self.chars.next() {
-                                                Some(ch) => Token::Number(match ch {
+                                                Some(ch) => Token::Char(match ch {
                                                     '\'' => '\'',
                                                     '\\' => '\\',
                                                     'n' => '\n',
                                                     't' => '\t',
                                                     'r' => '\r',
                                                     c => c,
-                                                } as i32 as f64),
+                                                }),
                                                 None => return reader_err!("Unexpected end of input reading character literal", self.current_line)
                                             }
-                                            ch => Token::Number(ch as i32 as f64),
+                                            ch => Token::Char(ch),
                                         }
                                         None => return reader_err!("Unexpected end of input reading character literal", self.current_line)
                                     };
@@ -400,6 +401,7 @@ impl Reader {
                     match tok {
                         Token::Rbrack => return ParserResult::Expr(list_val.into()),
                         Token::Eof => return ParserResult::EofErr,
+                        Token::Comma => {},
                         Token::HashComment => {
                             let tok = token_try!(self);
                             match self.parse_expr(tok) {
@@ -484,6 +486,7 @@ impl Reader {
             Token::True => ParserResult::Expr(Value::True),
             Token::False => ParserResult::Expr(Value::False),
             Token::Number(n) => ParserResult::Expr(Value::Num(n)),
+            Token::Char(c) => ParserResult::Expr(Value::Char(c)),
             Token::String(s) => ParserResult::Expr(Value::Str(s)),
             Token::Symbol(s) => ParserResult::Expr(Value::Sym(s)),
             Token::Keyword(s) => ParserResult::Expr(Value::Keyword(s)),

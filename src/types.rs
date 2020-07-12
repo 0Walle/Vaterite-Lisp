@@ -5,12 +5,12 @@ use crate::error::{Error};
 
 pub struct FuncData {
     pub ast: Value,
-    // pub params: Value,
     pub params: Vec<String>,
     pub opt_params: Vec<(String, Value)>,
     pub has_kwargs: bool,
     pub rest_param: Option<String>,
-    pub name: String
+    pub name: Option<String>,
+    pub arity: Arity,
 }
 
 #[derive(Clone)]
@@ -24,7 +24,6 @@ pub enum Arity {
 pub struct NatFunc {
     pub name: Rc<String>,
     pub arity: Arity,
-    // pub func: fn(Vec<Value>) -> Result<Value, String>
     pub func: fn(Vec<Value>) -> Result<Value, Error>
 }
 
@@ -52,12 +51,10 @@ pub enum Value {
     /// List value, the basic container of vaterite
     List(Rc<Vec<Value>>),
     /// Native function are used to define functions in rust that can be used in vaterite
-    // NatFunc(fn(Vec<Value>) -> Result<Value, String>),
     NatFunc(NatFunc),
     /// Vaterite function, defined by vaterite code
     Func {
         env: Env,
-        // eval: fn(Value, Env) -> Result<Value, String>,
         eval: fn(Value, Env) -> Result<Value, Error>,
         func: Rc<FuncData>,
         is_macro: bool,
@@ -67,7 +64,6 @@ pub enum Value {
     /// Lazy is used to implement lazy sequences
     Lazy{
         env: Env,
-        // eval: fn(Value, Env) -> Result<Value, String>,
         eval: fn(Value, Env) -> Result<Value, Error>,
         head: Rc<Value>,
         tail: Rc<Value>
@@ -122,7 +118,8 @@ impl From<f64> for Value { fn from(number: f64) -> Self { Value::Num(number) }}
 impl From<bool> for Value { fn from(b: bool) -> Self { if b { Value::True } else { Value::False }}}
 impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(Rc::new(ls)) }}}
 
-impl<T> From<Option<T>> for Value where T: Into<Value> { 
+impl<T> From<Option<T>> for Value
+    where T: Into<Value> { 
     fn from(opt: Option<T>) -> Self { 
         if let Some(v) = opt {
             v.into()
@@ -142,11 +139,9 @@ impl Value {
                     Arity::Min(n) => args.len() >= n.into(),
                     Arity::Range(min, max) => min as usize <= args.len() && args.len() <= max.into(),
                 } {
-                    // return Err(format!("Invalid arguments for {}, expected {} but found {}", f.name, f.arity, args.len()))
                     return Err(Error::ArgErr(Some((*f.name).clone()), f.arity.clone(), args.len() as u16))
                 }
                 match (f.func)(args) {
-                    // Err(err) => Err(format!("{}\n\tat {}", err, f.name)),
                     Err(err) => Err(format!("{}\n\tat {}", err, f.name).into()),
                     Ok(x) => Ok(x)
                 }
@@ -155,22 +150,12 @@ impl Value {
                 func, eval, env, ..
             } => {
                 let ast = &(**func).ast;
-                let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
+                let binds = &*func;
                 let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval)?;
                 return Ok(match eval(ast.clone(), local_env) {
                     Ok(val) => val,
-                    Err(err) => return Err(format!("{}\n\tat {}", err, func.name).into())
+                    Err(err) => return Err(format!("{}\n\tat {}", err, (func.name).as_ref().unwrap_or(&"lambda".to_string())).into())
                 })
-                // if let Value::List(l) = &(**func).params {
-                //     let binds = (l.clone(), func.opt_params.clone(), func.has_kwargs.clone(), func.rest_param.clone());
-                //     let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval)?;
-                //     return Ok(match eval(ast.clone(), local_env) {
-                //         Ok(val) => val,
-                //         Err(err) => return Err(format!("{}\n\tat {}", err, func.name))
-                //     })
-                // } else {
-                //     return Err("Parameter list is not a list".to_string())
-                // }
             },
             _ => Err(format!("Attempt to call non-function {}", self).into()),
         }
@@ -286,25 +271,31 @@ impl EnvStruct {
     }
 
     /// Creates a new environment and bind values acordingly to a lambda list
-    pub fn bind(access: Option<Env>, binds: (&Vec<String>, &Vec<(String, Value)>, &bool, &Option<String>), exprs: ValueList, eval: fn(Value, Env) -> ValueResult) -> Result<Env, Error> {
+    pub fn bind(access: Option<Env>, binds: &FuncData, exprs: ValueList, eval: fn(Value, Env) -> ValueResult) -> Result<Env, Error> {
         let env = EnvStruct::new(access);
-        let (req, opt, keys, rest) = binds;
+        let (req, opt, keys, rest) = (&binds.params, &binds.opt_params, &binds.has_kwargs, &binds.rest_param);
         let req_len = req.len();
         let opt_len = opt.len() * if *keys { 2 } else { 1 };
+        let args_len = exprs.len();
 
-        if exprs.len() < req_len {
-            return Err("not enough arguments passed to function".into())
-            // return Error::ArgErr(None, )
+        if !match binds.arity {
+            Arity::Exact(n) => args_len == n.into(),
+            Arity::Min(n) => args_len >= n.into(),
+            Arity::Range(min, max) => min as usize <= args_len && args_len <= max.into(),
+        } {
+            return Err(Error::ArgErr(binds.name.clone(), binds.arity.clone(), args_len as u16))
         }
+
+        if *keys && (args_len - req_len) % 2 != 0 {
+            return Err(Error::KwArgErr(binds.name.clone()))
+        }
+
         for (i, b) in req.iter().enumerate() {
             env.set(b.clone(), exprs[i].clone());
         }
-        let exprs = exprs[req_len..].to_vec();
+        // let exprs = exprs[req_len..].to_vec();
+        let exprs = &exprs[req_len..];
         if *keys {
-            if exprs.len() <= opt_len && exprs.len() % 2 != 0 {
-                return Err("Keyword arguments aren't in pairs".into())
-            }
-
             'next_key: for (_, b) in opt.iter().enumerate() {
                 let key = &b.0;
                 for i in (0..exprs.len()).step_by(2) {
@@ -387,7 +378,7 @@ impl Printer {
             Value::False => format!("#f"),
             Value::Num(n) => format!("{}", n),
             Value::Str(s) => format!("{:?}", s),
-            Value::Char(s) => format!("#'{:?}'", s),
+            Value::Char(s) => format!("#{:?}", s),
             Value::Chars(s) => format!("{:?}", s),
             Value::Sym(s) => if level == 0 {
                     format!("'{}", s)
@@ -412,7 +403,11 @@ impl Printer {
                 res
             },
             Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => format!("[Function {}]", func.name),
+            Value::Func { func, .. } => if let Some(name) = &func.name {
+                format!("[Function {}]", name)
+            } else {
+                format!("[Function]")
+            },
             Value::Box(val) => format!("(box {})", Printer::repr_(&(val.borrow()), level)),
             Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_(&*head, level), tail),
             Value::Map(map) => {
@@ -443,11 +438,11 @@ impl Printer {
     pub fn repr_color(value: &Value, level: i32) -> String {
         match value {
             Value::Nil => format!("()"),
-            Value::True => format!("\x1b[93m#t\x1b[0m"),
-            Value::False => format!("\x1b[93m#f\x1b[0m"),
+            Value::True => format!("\x1b[96m#t\x1b[0m"),
+            Value::False => format!("\x1b[96m#f\x1b[0m"),
             Value::Num(n) => format!("\x1b[93m{}\x1b[0m", n),
             Value::Str(s) => format!("\x1b[32m{:?}\x1b[0m", s),
-            Value::Char(s) => format!("\x1b[93m#'{:?}'\x1b[0m", s),
+            Value::Char(s) => format!("\x1b[93m#{:?}\x1b[0m", s),
             Value::Chars(s) => format!("{:?}", s),
             Value::Sym(s) => if level == 0 {
                     format!("'{}", s)
@@ -472,7 +467,11 @@ impl Printer {
                 res
             },
             Value::NatFunc(func) => format!("\x1b[36m[NativeFunction {}]\x1b[0m", func.name),
-            Value::Func { func, .. } => format!("\x1b[36m[Function {}]\x1b[0m", func.name),
+            Value::Func { func, .. } => if let Some(name) = &func.name {
+                format!("\x1b[36m[Function {}]\x1b[0m", name)
+            } else {
+                format!("\x1b[36m[Function]\x1b[0m")
+            },
             Value::Box(val) => format!("(box {})", Printer::repr_color(&(val.borrow()), level)),
             Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_color(&*head, level), tail),
             Value::Map(map) => {
@@ -500,10 +499,6 @@ impl Printer {
         }
     }
 
-    // pub fn repr(value: &Value) -> String {
-    //     Printer::repr_(value, 0)
-    // }
-
     pub fn str_(value: &Value) -> String {
         match value {
             Value::Nil => format!("()"),
@@ -529,7 +524,11 @@ impl Printer {
                 res
             },
             Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => format!("[Function {}]", func.name),
+            Value::Func { func, .. } => if let Some(name) = &func.name {
+                format!("[Function {}]", name)
+            } else {
+                format!("[Function]")
+            },
             Value::Box(val) => format!("(box {})", Printer::str_(&(val.borrow()))),
             Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {:?})", Printer::str_(&*head), tail),
             Value::Map(map) => {
