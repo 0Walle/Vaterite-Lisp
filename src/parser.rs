@@ -1,18 +1,15 @@
 use crate::types::{Value, ValueList};
 use std::iter::Peekable;
-use std::vec::IntoIter;
+use std::str::Chars;
 use std::rc::Rc;
 
-#[macro_export]
-macro_rules! list {
-    // ( $arg:expr ) => {
-    //     Value::List(Rc::new($arg))
-    // };
-    [ $($args:expr),* ] => {{
-        let vec: Vec<Value> = vec![$($args),*];
-        Value::List(Rc::new(vec))
-    }}
-}
+// #[macro_export]
+// macro_rules! list {
+//     [ $($args:expr),* ] => {{
+//         let vec: Vec<Value> = vec![$($args),*];
+//         Value::List(Rc::new(vec))
+//     }}
+// }
 
 macro_rules! vater_args {
     ( $($rest:tt)* ) => { vater!( $($rest)* ) };
@@ -56,8 +53,8 @@ pub enum Token {
 }
 
 /// The tokenizer reads an input and produces expressions
-pub struct Reader {
-    chars: Peekable<IntoIter<char>>,
+pub struct Reader<'a> {
+    chars: Peekable<Chars<'a>>,
     current_line: i32,
 }
 
@@ -85,11 +82,11 @@ macro_rules! token_try {
     };
 }
 
-impl Reader {
+impl<'a> Reader<'a> {
     /// Create a new Tokenizer from a source string
-    pub fn new(source: String) -> Self {
+    pub fn new(source: &'a String) -> Self {
         Reader{
-            chars: source.chars().collect::<Vec<char>>().into_iter().peekable(),
+            chars: source.chars().peekable(),
             current_line: 1,
         }
     }
@@ -336,12 +333,6 @@ impl Reader {
                                 err => return err
                             };
                         },
-                        // Token::Symbol(s) if s == "->" => {
-                        //     let mut nlist: ValueList = vec![];
-                        //     nlist.push(Value::Sym("arrow".to_string()));
-                        //     nlist.push(list!(list_val.clone()));
-                        //     list_val = nlist;
-                        // }
                         Token::Symbol(s) if s == "." => {
                             if list_val.len() == 0 {
                                 list_val.push(Value::Sym(".".to_string()));
@@ -356,16 +347,6 @@ impl Reader {
                                 list_val.push(nlist.into());
                             }
                         }
-                        // Token::Symbol(s) if s == "..." => {
-                        //     if list_val.len() == 0 {
-                        //         list_val.push(Value::Sym("...".to_string()));
-                        //     } else {
-                        //         let mut nlist: ValueList = vec![];
-                        //         nlist.push(Value::Sym("ellipsis".to_string()));
-                        //         nlist.push(list_val.pop().unwrap());
-                        //         list_val.push(list!(nlist));
-                        //     }
-                        // }
                         tk => list_val.push(match self.parse_expr(tk) {
                             ParserResult::Expr(expr) => expr,
                             err => return err

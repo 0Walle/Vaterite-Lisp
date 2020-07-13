@@ -491,7 +491,7 @@ fn operator_len(v: ValueList) -> ValueResult {
 
 fn core_read(v: ValueList) -> ValueResult {
     if let Value::Str(input) = v[0].clone(){
-        let mut tk = parser::Reader::new(input);
+        let mut tk = parser::Reader::new(&input);
         if let Ok(tok) = tk.next_token() {
             match tk.parse_expr(tok) {
                 parser::ParserResult::Expr(expr) => Ok(expr),

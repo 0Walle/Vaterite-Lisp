@@ -114,6 +114,7 @@ impl PartialEq for Value {
 }
 
 impl From<&str> for Value { fn from(string: &str) -> Self { Value::Str(string.to_string()) }}
+impl From<String> for Value { fn from(string: String) -> Self { Value::Str(string) }}
 impl From<f64> for Value { fn from(number: f64) -> Self { Value::Num(number) }}
 impl From<bool> for Value { fn from(b: bool) -> Self { if b { Value::True } else { Value::False }}}
 impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(Rc::new(ls)) }}}
@@ -224,6 +225,13 @@ impl Value {
         match &self {
             Value::List(ls) => Some(ls.clone()),
             Value::Nil => Some(Rc::new(Vec::default())),
+            _ => None
+        }
+    }
+
+    pub fn to_pair(&self) -> Option<(Value, Value)> {
+        match &self {
+            Value::List(ls) if ls.len() == 2 => Some((ls[0].clone(), ls[1].clone())),
             _ => None
         }
     }
@@ -438,8 +446,8 @@ impl Printer {
     pub fn repr_color(value: &Value, level: i32) -> String {
         match value {
             Value::Nil => format!("()"),
-            Value::True => format!("\x1b[96m#t\x1b[0m"),
-            Value::False => format!("\x1b[96m#f\x1b[0m"),
+            Value::True => format!("\x1b[95m#t\x1b[0m"),
+            Value::False => format!("\x1b[95m#f\x1b[0m"),
             Value::Num(n) => format!("\x1b[93m{}\x1b[0m", n),
             Value::Str(s) => format!("\x1b[32m{:?}\x1b[0m", s),
             Value::Char(s) => format!("\x1b[93m#{:?}\x1b[0m", s),
