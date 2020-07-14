@@ -36,8 +36,8 @@ impl Printer {
                 res
             },
             Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("[Function {}]", name)
+            Value::Func { func, .. } => if let Some(_) = &func.name {
+                format!("[Function]")
             } else {
                 format!("[Function]")
             },
@@ -148,7 +148,7 @@ impl Printer {
             },
             Value::NatFunc(func) => format!("\x1b[36m[NativeFunction {}]\x1b[0m", func.name),
             Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("\x1b[36m[Function {}]\x1b[0m", name)
+                format!("\x1b[36m[Function {}]\x1b[0m", names.get(*name))
             } else {
                 format!("\x1b[36m[Function]\x1b[0m")
             },
@@ -204,8 +204,8 @@ impl Printer {
                 res
             },
             Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("[Function {}]", name)
+            Value::Func { func, .. } => if let Some(_) = &func.name {
+                format!("[Function]")
             } else {
                 format!("[Function]")
             },

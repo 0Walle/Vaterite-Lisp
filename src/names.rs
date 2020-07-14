@@ -46,6 +46,7 @@ impl NamePool {
 
 macro_rules! buitin_names {
     ( $($s:expr => $name:ident = $value:expr,)+ ) => {
+        #[allow(dead_code)]
         pub mod builtin {
             use super::Name;
             $( pub const $name: Name = Name($value); )+
@@ -120,4 +121,5 @@ buitin_names! {
     "from" => FROM = -50,
     "exit" => EXIT = -51,
     "." => DOT_ = -52,
+    "assert" => ASSERT = -53,
 }

@@ -1,9 +1,10 @@
 use crate::types::{Value, Arity};
+use crate::names::{Name};
 
 #[derive(Clone)]
 pub enum Error {
     Reason(String),
-    ArgErr(Option<String>, Arity, u16),
+    ArgErr(Option<Name>, Arity, u16),
     KwArgErr(Option<String>),
     TypeErr(&'static str, Option<Value>),
     BindErr(String),
@@ -28,7 +29,7 @@ impl std::fmt::Debug for Error {
                 write!(f, "Keyword arguments are not in pairs")
             }
             Error::ArgErr(name, arity, got) => if let Some(name) = name {
-                write!(f, "{} expected {} but got {}", name, arity, got)
+                write!(f, "{} expected {} but got {}", name.0, arity, got)
             } else {
                 write!(f, "Expected {} but got {}", arity, got)
             }

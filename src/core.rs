@@ -208,7 +208,7 @@ fn operator_rev_cons(v: ValueList, names: &NamePool) -> ValueResult {
 }
 
 
-fn core_hashmap(v: ValueList, names: &NamePool) -> ValueResult {
+fn core_hashmap(v: ValueList, _names: &NamePool) -> ValueResult {
     if v.len() % 2 != 0 {
         return Err(error::Error::KwArgErr(Some("hash-map".to_string())));
     }
@@ -222,15 +222,16 @@ fn core_hashmap(v: ValueList, names: &NamePool) -> ValueResult {
             // Value::Str(s) => map.insert(s.clone(), v[i+1].clone()),
             // Value::Sym(s) => map.insert(s.clone(), v[i+1].clone()),
             Value::Keyword(s) | Value::Sym(s) => map.insert(*s, v[i+1].clone()),
-            Value::Str(s) => map.insert(names.add(&s), v[i+1].clone()),
+            // Value::Str(s) => map.insert(names.add(&s), v[i+1].clone()),
             // Value::Sym(s) => map.insert(names.add(&s), v[i+1].clone()),
-            x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+            x => return type_err!("keyword", x.clone())
+            // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
         };
     };
     Ok(Value::Map(Rc::new(map)))
 }
 
-fn operator_assoc(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_assoc(v: ValueList, _names: &NamePool) -> ValueResult {
     let mut map = if let Value::Map(hashmap) = &v[0] {
         (**hashmap).clone()
     } else {
@@ -250,9 +251,10 @@ fn operator_assoc(v: ValueList, names: &NamePool) -> ValueResult {
             // Value::Str(s) => map.insert(s.clone(), v[i+1].clone()),
             // Value::Sym(s) => map.insert(s.clone(), v[i+1].clone()),
             Value::Keyword(s) | Value::Sym(s) => map.insert(*s, v[i+1].clone()),
-            Value::Str(s) => map.insert(names.add(&s), v[i+1].clone()),
+            // Value::Str(s) => map.insert(names.add(&s), v[i+1].clone()),
             // Value::Sym(s) => map.insert(names.add(&s), v[i+1].clone()),
-            x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+            x => return type_err!("keyword", x.clone())
+            // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
         };
     };
     Ok(Value::Map(Rc::new(map)))
@@ -270,18 +272,19 @@ fn operator_map_update(v: ValueList, names: &NamePool) -> ValueResult {
         //     Some(v) => (v.clone(), s),
         //     None => (Value::Nil, s)
         // },
-        Value::Str(s) => {
-            let k = names.add(s);
-            match map.get(&k) {
-                Some(v) => (v.clone(), k),
-                None => (Value::Nil, k)
-            }
-        },
+        // Value::Str(s) => {
+        //     let k = names.add(s);
+        //     match map.get(&k) {
+        //         Some(v) => (v.clone(), k),
+        //         None => (Value::Nil, k)
+        //     }
+        // },
         Value::Keyword(n) | Value::Sym(n) => match map.get(n){
             Some(v) => (v.clone(), *n),
             None => (Value::Nil, *n)
         },
-        x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+        x => return type_err!("keyword", x.clone())
+        // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
     };
     let mut args = vec![old];
     args.extend_from_slice(&v[3..]);
@@ -290,7 +293,7 @@ fn operator_map_update(v: ValueList, names: &NamePool) -> ValueResult {
     Ok(Value::Map(Rc::new(map)))
 }
 
-fn operator_dissoc(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_dissoc(v: ValueList, _names: &NamePool) -> ValueResult {
     let mut map = if let Value::Map(hashmap) = &v[0] {
         (**hashmap).clone()
     } else {
@@ -306,14 +309,15 @@ fn operator_dissoc(v: ValueList, names: &NamePool) -> ValueResult {
             // Value::Str(s) => map.remove(s),
             // Value::Sym(s) => map.remove(s),
             Value::Keyword(s) | Value::Sym(s) => map.remove(s),
-            Value::Str(s) => map.remove(&names.add(&s)),
-            x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+            // Value::Str(s) => map.remove(&names.add(&s)),
+            x => return type_err!("keyword", x.clone())
+            // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
         };
     };
     Ok(Value::Map(Rc::new(map)))
 }
 
-fn operator_map_get(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_map_get(v: ValueList, _names: &NamePool) -> ValueResult {
     let map = if let Value::Map(hashmap) = &v[0] {
         (**hashmap).clone()
     } else {
@@ -334,15 +338,16 @@ fn operator_map_get(v: ValueList, names: &NamePool) -> ValueResult {
             Some(v) => Ok(v.clone()),
             None => Err(format!("Key {} is not present in map", s.0).into())
         },
-        Value::Str(s) => match map.get(&names.add(&s)){
-            Some(v) => Ok(v.clone()),
-            None => Err(format!("Key {} is not present in map", s).into())
-        },
-        x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+        // Value::Str(s) => match map.get(&names.add(&s)){
+        //     Some(v) => Ok(v.clone()),
+        //     None => Err(format!("Key {} is not present in map", s).into())
+        // },
+        // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+        x => return type_err!("keyword", x.clone())
     }
 }
 
-fn operator_has_key(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_has_key(v: ValueList, _names: &NamePool) -> ValueResult {
     let map = if let Value::Map(hashmap) = &v[0] {
         (**hashmap).clone()
     } else {
@@ -354,15 +359,15 @@ fn operator_has_key(v: ValueList, names: &NamePool) -> ValueResult {
         // Value::Keyword(s) => map.contains_key(&names.get(*s)),
         // Value::Str(s) | Value::Sym(s) => map.contains_key(s),
         Value::Keyword(s) | Value::Sym(s) => map.contains_key(s),
-        Value::Str(s) => map.contains_key(&names.add(&s)),
-        x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+        // x => return Err(format!("Value {} can't be used as key", Printer::str_name(x, names)).into()),
+        x => return type_err!("keyword", x.clone())
     } {
         return Ok(Value::True);
     };
     Ok(Value::False)
 }
 
-fn core_map_keys(v: ValueList, names: &NamePool) -> ValueResult {
+fn core_map_keys(v: ValueList, _names: &NamePool) -> ValueResult {
     let map = if let Value::Map(hashmap) = &v[0] {
         (**hashmap).clone()
     } else {
@@ -371,7 +376,7 @@ fn core_map_keys(v: ValueList, names: &NamePool) -> ValueResult {
 
     let mut keys: ValueList = vec![];
     for (k, _) in map {
-        keys.push(Value::Str(names.get(k)))
+        keys.push(Value::Keyword(k))
     }
     Ok(keys.into())
 }
@@ -772,7 +777,7 @@ fn core_assert(v: ValueList, names: &NamePool) -> ValueResult {
                 return Ok(v[0].clone())
             }
         },
-        x => Err(error::Error::ArgErr(Some("assert".into()), Arity::Range(1,3), x as u16))
+        x => Err(error::Error::ArgErr(Some(crate::names::builtin::ASSERT), Arity::Range(1,3), x as u16))
     }
 }
 

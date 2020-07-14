@@ -7,11 +7,11 @@ use crate::names::{Name, NamePool};
 
 pub struct FuncData {
     pub ast: Value,
-    pub params: Vec<String>,
-    pub opt_params: Vec<(String, Value)>,
+    pub params: Vec<Name>,
+    pub opt_params: Vec<(Name, Value)>,
     pub has_kwargs: bool,
-    pub rest_param: Option<String>,
-    pub name: Option<String>,
+    pub rest_param: Option<Name>,
+    pub name: Option<Name>,
     pub arity: Arity,
 }
 
@@ -146,7 +146,7 @@ impl Value {
                     Arity::Min(n) => args.len() >= n.into(),
                     Arity::Range(min, max) => min as usize <= args.len() && args.len() <= max.into(),
                 } {
-                    return Err(Error::ArgErr(Some((*f.name).clone()), f.arity.clone(), args.len() as u16))
+                    return Err(Error::ArgErr(Some(names.add(&*f.name)), f.arity.clone(), args.len() as u16))
                 }
                 match (f.func)(args, names) {
                     Err(err) => Err(format!("{}\n\tat {}", err, f.name).into()),
@@ -161,7 +161,10 @@ impl Value {
                 let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval, names)?;
                 return Ok(match eval(ast.clone(), local_env, names) {
                     Ok(val) => val,
-                    Err(err) => return Err(format!("{}\n\tat {}", err, (func.name).as_ref().unwrap_or(&"lambda".to_string())).into())
+                    Err(err) => return match func.name {
+                        Some(name) => Err(format!("{}\n\tat {}", err, names.get(name)).into()),
+                        None => Err(format!("{}\n\tat lambda", err).into())
+                    }
                 })
             },
             _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(self, 0, names)).into()),
@@ -302,11 +305,11 @@ impl EnvStruct {
         }
 
         if *keys && (args_len - req_len) % 2 != 0 {
-            return Err(Error::KwArgErr(binds.name.clone()))
+            return Err(Error::KwArgErr(binds.name.map(|n| names.get(n))))
         }
 
         for (i, b) in req.iter().enumerate() {
-            env.set(b.clone(), exprs[i].clone());
+            env.set(names.get(*b), exprs[i].clone());
         }
         // let exprs = exprs[req_len..].to_vec();
         let exprs = &exprs[req_len..];
@@ -315,31 +318,31 @@ impl EnvStruct {
                 let key = &b.0;
                 for i in (0..exprs.len()).step_by(2) {
                     if let Value::Keyword(kw) = &exprs[i] {
-                        if key == &names.get(*kw) {
-                            env.set(key.clone(), exprs[i + 1].clone());
+                        if key == kw {
+                            env.set(names.get(*key), exprs[i + 1].clone());
                             continue 'next_key;
                         }
                     }
                 }
-                env.set(key.clone(), eval(b.1.clone(), env.clone(), names)?);
+                env.set(names.get(*key), eval(b.1.clone(), env.clone(), names)?);
             }
         } else {
             for (i, b) in opt.iter().enumerate() {
                 match exprs.get(i) {
                     Some(expr) => {
-                        env.set(b.0.clone(), expr.clone());
+                        env.set(names.get(b.0), expr.clone());
                     }
                     None => {
-                        env.set(b.0.clone(), eval(b.1.clone(), env.clone(), names)?);
+                        env.set(names.get(b.0), eval(b.1.clone(), env.clone(), names)?);
                     }
                 }
             }
         }
         if let Some(rest) = rest {
             if exprs.len() > opt_len {
-                env.set(rest.clone(), exprs[opt_len..].to_vec().into());
+                env.set(names.get(*rest), exprs[opt_len..].to_vec().into());
             } else {
-                env.set(rest.clone(), Value::Nil);
+                env.set(names.get(*rest), Value::Nil);
             }
         };
         Ok(env)
