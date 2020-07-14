@@ -3,6 +3,8 @@ mod parser;
 mod types;
 mod core;
 mod error;
+mod printer;
+mod names;
 
 use std::io;
 use std::io::Write;
@@ -19,7 +21,10 @@ use std::collections::HashMap;
 // TODO: Struct definition type
 // TODO: Compile!!
 
-use types::{Value, Env, ValueList, FuncData, Arity};
+use crate::types::{Value, Env, ValueList, FuncData, Arity};
+use crate::printer::Printer;
+use crate::names::{NamePool};
+use crate::names::builtin as stdname;
 
 type ValueResult = Result<Value, error::Error>;
 macro_rules! arg_err {
@@ -38,14 +43,14 @@ macro_rules! pair_err {
 fn quasiquote(ast: Value) -> Value {
     match ast {
         // Value::Sym(_) => list![Value::Sym("quote".to_string()), ast],
-        Value::Sym(_) => vater!{ (quote [ast]) },
+        Value::Sym(_) => vater!{ (QUOTE [ast]) },
         Value::List(list) if list.len() > 0 => {
             let head = &list[0];
             match head {
-                Value::Sym(s) if s == "unquote" => return if list.len() > 1 { list[1].clone() } else { Value::Nil },
+                Value::Sym(s) if s == &stdname::UNQUOTE => return if list.len() > 1 { list[1].clone() } else { Value::Nil },
                 Value::List(l) if l.len() > 0 => match &l[0] {
-                    Value::Sym(s) if s == "unquote-splicing" => return vater!{
-                        (append [if l.len() > 1 { l[1].clone() } else { Value::Nil}] [quasiquote(list[1..].to_vec().into())])
+                    Value::Sym(s) if s == &stdname::UNQUOTE_SPLICING => return vater!{
+                        (APPEND [if l.len() > 1 { l[1].clone() } else { Value::Nil}] [quasiquote(list[1..].to_vec().into())])
                     },
                     _ => {}
                 }
@@ -55,33 +60,33 @@ fn quasiquote(ast: Value) -> Value {
             let cdr = quasiquote(list[1..].to_vec().into());
             if cdr.is_nil() {
                 // return list![Value::Sym("list".to_string()), car]
-                return vater!{ (list [car]) }
+                return vater!{ (LIST [car]) }
             }
             
             if let Value::List(l) = &cdr {
                 return match &l[0] {
-                    Value::Sym(s) if s == "list" => {
-                        let mut start = vec![vater!(list), car];
+                    Value::Sym(s) if s == &stdname::LIST => {
+                        let mut start = vec![vater!(LIST), car];
                         start.extend_from_slice(&l[1..]);
                         start.into()
                     }
                     //_ => list![Value::Sym("cons".to_string()), car, cdr]
-                    _ => vater!{ (cons [car] [cdr]) }
+                    _ => vater!{ (CONS [car] [cdr]) }
                 }
             }
 
             //return list![Value::Sym("cons".to_string()), car, cdr]
-            return vater!{ (cons [car] [cdr]) }
+            return vater!{ (CONS [car] [cdr]) }
         }
         _ => ast
     }
 }
 
 /// Tests if a list is a macro call
-fn is_macro_call(ast: Value, env: Env) -> bool {
+fn is_macro_call(ast: Value, env: Env, names: &NamePool) -> bool {
     match ast {
         Value::List(l) if l.len() > 0 => if let Value::Sym(sym) = &l[0] {
-            match env.get(sym.clone()) {
+            match env.get(names.get(*sym)) {
                 Ok(e) => match e {
                     Value::Func{ is_macro, .. } => return is_macro,
                     _ => false
@@ -97,12 +102,12 @@ fn is_macro_call(ast: Value, env: Env) -> bool {
 
 /// Try to expand an ast as a macro call, if isn't return the original ast
 // fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueErr) {
-fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueResult) {
+fn macro_expand(mut ast: Value, mut env: Env, names: &NamePool) -> (bool, ValueResult) {
     let mut was_expanded = false;
-    while is_macro_call(ast.clone(), env.clone()) {
+    while is_macro_call(ast.clone(), env.clone(), names) {
         if let Value::List(l) = &ast { 
             if let Value::Sym(s) = &l[0] {
-                let makro = if let Ok(name) = env.get(s.clone()) {
+                let makro = if let Ok(name) = env.get(names.get(*s)) {
                     name
                 }else{
                     return (false, Err("Macro not defined".into()));
@@ -123,12 +128,12 @@ fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueResult) {
                     // let binds = (params.clone(), func.opt_params.clone(), func.has_kwargs.clone(), func.rest_param.clone());
                     // let binds = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
                     let binds = &*func;
-                    let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), binds, args, eval){
+                    let macro_scope = match types::EnvStruct::bind(Some(menv.clone()), binds, args, eval, names){
                         Ok(scope) => scope,
                         Err(err) => return (false, Err(err))
                     };
                     let macro_ast = &func.ast;
-                    ast = match eval(macro_ast.clone(), macro_scope.clone()) {
+                    ast = match eval(macro_ast.clone(), macro_scope.clone(), names) {
                         Ok(ast) => ast,
                         Err(err) => return (false, Err(err))
                     };
@@ -142,13 +147,14 @@ fn macro_expand(mut ast: Value, mut env: Env) -> (bool, ValueResult) {
 }
 
 /// Evaluates the ast
-fn eval_ast(ast: &Value, env: &Env) -> ValueResult {
+fn eval_ast(ast: &Value, env: &Env, names: &NamePool) -> ValueResult {
     match ast {
-        Value::Sym(sym) => env.get(sym.clone()),
+        // Value::Sym(sym) => env.get(sym.clone()),
+        Value::Sym(sym) => env.get(names.get(*sym)),
         Value::List(v) =>  {
             let mut lst: ValueList = vec![];
             for expr in v.iter() {
-                lst.push(eval(expr.clone(), env.clone())?)
+                lst.push(eval(expr.clone(), env.clone(), names)?)
             }
             Ok(Value::List(Rc::new(lst)))
         }
@@ -157,7 +163,7 @@ fn eval_ast(ast: &Value, env: &Env) -> ValueResult {
 }
 
 /// Produces an lambda list from an vaterite lambda list
-fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)>, bool, Option<String>, Arity), String> {
+fn from_lambda_list(list: ValueList, names: &NamePool) -> Result<(Vec<String>, Vec<(String, Value)>, bool, Option<String>, Arity), String> {
     let mut req: Vec<String> = vec![];
     let mut opt: Vec<(String, Value)> = vec![];
     let mut keys = false;
@@ -169,34 +175,36 @@ fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)
         match state {
             0 => {
                 match &expr {
-                    Value::Keyword(s) if s == "rest" => {
+                    Value::Keyword(s) if *s == names::builtin::REST => {
                         rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
-                            rest_sym.clone()
+                            // rest_sym.clone()
+                            names.get(*rest_sym)
                         }else {
                             return Err("Rest parameter is not a symbol".into())
                         });
                         break;
                     },
-                    Value::Keyword(s) if s == "opt" => state = 1,
-                    Value::Keyword(s) if s == "key" => {state = 1; keys = true},
-                    Value::Sym(s) => req.push(s.clone()),
+                    Value::Keyword(s) if *s == names::builtin::OPT => state = 1,
+                    Value::Keyword(s) if *s == names::builtin::KEY => {state = 1; keys = true},
+                    Value::Sym(s) => req.push(names.get(*s)),
                     x => return Err(format!("Required parameter is not a symbol, found {:?}", x))
                 }
             }
             1 => {
                 match &expr {
-                    Value::Keyword(s) if s == "rest" => {
+                    Value::Keyword(s) if *s == names::builtin::REST => {
                         rest = Some(if let Value::Sym(rest_sym) = &list[i + 1] { 
-                            rest_sym.clone()
-                        }else {
+                            // rest_sym.clone()
+                            names.get(*rest_sym)
+                        } else {
                             return Err("Rest parameter is not a symbol".into())
                         });
                         break;
                     },
-                    Value::Sym(s) => opt.push((s.clone(), Value::Nil)),
+                    Value::Sym(s) => opt.push((names.get(*s), Value::Nil)),
                     Value::List(l) if l.len() == 2 => {
                         if let Value::Sym(s) = &l[0] {
-                            opt.push((s.clone(), l[1].clone()))
+                            opt.push((names.get(*s), l[1].clone()))
                         } else {
                             return Err("Parameter pair bind is not a symbol".into())
                         }
@@ -221,12 +229,12 @@ fn from_lambda_list(list: ValueList) -> Result<(Vec<String>, Vec<(String, Value)
     Ok((req.into(), opt, keys, rest, arity))
 }
 
-fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<String, Value>, String>> {
+fn match_pattern(pat: Value, expr: Value, env: Env, names: &NamePool) -> Option<Result<HashMap<String, Value>, String>> {
     match pat.clone() {
-        Value::Sym(s) if s == "_" => {
+        Value::Sym(s) if s == stdname::IT_ => {
             Some(Ok(HashMap::default()))
         }
-        Value::Sym(s) if s == "nil" => {
+        Value::Sym(s) if s == stdname::NIL => {
             match expr {
                 Value::List(l) if l.len() == 0 => Some(Ok(HashMap::default())),
                 Value::Nil => Some(Ok(HashMap::default())),
@@ -235,24 +243,24 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
         }
         Value::Sym(s) => {
             let mut map = HashMap::default();
-            map.insert(s, expr.clone());
+            map.insert(names.get(s), expr.clone());
             Some(Ok(map))
         }
         Value::List(l) if l.len() > 1 => {
             match &l[0] {
-                Value::Sym(s) if s == "quote" => {
+                Value::Sym(s) if s == &stdname::QUOTE => {
                     if l.get(1).unwrap_or(&Value::Nil).clone() == expr.clone() {
                         Some(Ok(HashMap::default()))
                     } else {
                         None
                     }
                 }
-                Value::Sym(s) if s == "list" => {
+                Value::Sym(s) if s == &stdname::LIST => {
                     if let Value::List(expr) = expr {
                         if l.len() == expr.len() + 1 {
                             let mut all_binds = HashMap::default();
                             for (pat, expr) in l[1..].iter().zip(expr.iter()) {
-                                match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                                match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                                     Some(res) => match res {
                                         Ok(binds) => {
                                             for (k, v) in binds {
@@ -272,13 +280,13 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                         None
                     }
                 }
-                Value::Sym(s) if s == "cons" => {
+                Value::Sym(s) if s == &stdname::CONS => {
                     if let Value::List(expr) = expr {
                         let last = l.len();
                         if l.len() <= expr.len() + 2 {
                             let mut all_binds = HashMap::default();
                             for (pat, expr) in l[1..last-1].iter().zip(expr.iter()) {
-                                match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                                match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                                     Some(res) => match res {
                                         Ok(binds) => {
                                             for (k, v) in binds {
@@ -290,7 +298,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                                     None => return None
                                 }
                             };
-                            match match_pattern(l[last-1].clone(), expr[last-2..].to_vec().into(), env.clone()) {
+                            match match_pattern(l[last-1].clone(), expr[last-2..].to_vec().into(), env.clone(), names) {
                                 Some(res) => match res {
                                     Ok(binds) => {
                                         for (k, v) in binds {
@@ -309,14 +317,14 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                         None
                     }
                 }
-                Value::Sym(s) if s == "rev-cons" => {
+                Value::Sym(s) if s == &stdname::REV_CONS => {
                     if let Value::List(expr) = expr {
                         let pat_len = l.len() - 1;
                         let expr_len = expr.len();
                         if pat_len <= expr.len() + 1 {
                             let mut all_binds = HashMap::default();
                             for i in 0..pat_len-1 {
-                                match match_pattern(l[pat_len-i].clone(), expr[expr_len-i-1].clone(), env.clone()) {
+                                match match_pattern(l[pat_len-i].clone(), expr[expr_len-i-1].clone(), env.clone(), names) {
                                     Some(res) => match res {
                                         Ok(binds) => {
                                             for (k, v) in binds {
@@ -328,7 +336,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                                     None => return None
                                 }
                             };
-                            match match_pattern(l[1].clone(), expr[0..expr_len+1-pat_len].to_vec().into(), env.clone()) {
+                            match match_pattern(l[1].clone(), expr[0..expr_len+1-pat_len].to_vec().into(), env.clone(), names) {
                                 Some(res) => match res {
                                     Ok(binds) => {
                                         for (k, v) in binds {
@@ -347,19 +355,19 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                         None
                     }
                 }
-                Value::Sym(s) if s == "if" => {
-                    let func = match eval(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone()) {
+                Value::Sym(s) if s == &stdname::IF => {
+                    let func = match eval(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone(), names) {
                         Ok(pred) => pred,
                         Err(err) => return Some(Err(err.to_string()))
                     };
 
                     let mut all_binds = HashMap::default();
-                    if match func.apply(vec![expr.clone()]) {
+                    if match func.apply(vec![expr.clone()], names) {
                         Ok(res) => !res.is_false(),
                         Err(err) => return Some(Err(err.to_string()))
                     } {
                         for pat in l[2..].iter() {
-                            match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                            match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                                 Some(res) => match res {
                                     Ok(binds) => {
                                         for (k, v) in binds {
@@ -377,10 +385,10 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                     }
                     
                 }
-                Value::Sym(s) if s == "and" => {
+                Value::Sym(s) if s == &stdname::AND => {
                     let mut all_binds = HashMap::default();
                     for pat in l[1..].iter() {
-                        match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                        match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                             Some(res) => match res {
                                 Ok(binds) => {
                                     for (k, v) in binds {
@@ -394,9 +402,9 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                     }
                     Some(Ok(all_binds))
                 }
-                Value::Sym(s) if s == "or" => {
+                Value::Sym(s) if s == &stdname::OR => {
                     for pat in l[1..].iter() {
-                        match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                        match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                             Some(res) => match res {
                                 Ok(binds) => {
                                     let mut all_binds = HashMap::default();
@@ -412,7 +420,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                     }
                     None
                 }
-                Value::Sym(s) if s == "hash-map" => {
+                Value::Sym(s) if s == &stdname::HASH_MAP => {
                     let map = match expr {
                         Value::Map(map) => map.clone(),
                         _ => return None
@@ -420,15 +428,20 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
 
                     let mut all_binds = HashMap::default();
                     for i in (1..l.len()).step_by(2) {
+                        // let key = match &l[i] {
+                        //       Value::Sym(s)
+                        //     | Value::Str(s) => s.clone(),
+                        //     Value::Keyword(n) => names.get(*n).clone(),
+                        //     x => return Some(Err(format!("Value {:?} cannot be used as key in hash-map pattern", x)))
+                        // };
                         let key = match &l[i] {
-                              Value::Sym(s)
-                            | Value::Str(s)
-                            | Value::Keyword(s) => s,
-                            x => return Some(Err(format!("Value {:?} cannot be used as key in hash-map pattern", x)))
-                        };
+                          Value::Str(s) => names.add(s),
+                          Value::Keyword(n) | Value::Sym(n) => *n,
+                          x => return Some(Err(format!("Value {:?} cannot be used as key in hash-map pattern", x)))
+                      };
 
-                        if let Some(val) = map.get(key) {
-                            match match_pattern(l[i+1].clone(), val.clone(), env.clone()) {
+                        if let Some(val) = map.get(&key) {
+                            match match_pattern(l[i+1].clone(), val.clone(), env.clone(), names) {
                                 Some(res) => match res {
                                     Ok(binds) => {
                                         for (k, v) in binds {
@@ -445,7 +458,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                     }
                     Some(Ok(all_binds))
                 }
-                Value::Sym(s) if s == "match-struct" => {
+                /*Value::Sym(s) if s == &stdname::STRUCT => {
                     if let Value::Struct(id, expr) = expr {
                         if ! match &l[1] {
                             Value::Sym(check_id) => *check_id == *id,
@@ -457,7 +470,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                         if l.len() == expr.len() + 2 {
                             let mut all_binds = HashMap::default();
                             for (pat, expr) in l[2..].iter().zip(expr.iter()) {
-                                match match_pattern(pat.clone(), expr.clone(), env.clone()) {
+                                match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
                                     Some(res) => match res {
                                         Ok(binds) => {
                                             for (k, v) in binds {
@@ -476,8 +489,8 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                     } else {
                         None
                     }
-                }
-                Value::Sym(s) if s == "from" => {
+                }*/
+                Value::Sym(s) if s == &stdname::FROM => {
                     let num = if let Value::Num(expr) = expr {
                         expr
                     } else {
@@ -498,19 +511,19 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
                         _ => return Some(Err(format!("from pattern requires two number arguments")))
                     }                    
                 }
-                Value::Sym(s) if s == "macro" => {
-                    match macro_expand(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone()) {
+                Value::Sym(s) if s == &stdname::MACRO_EXPAND => {
+                    match macro_expand(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone(), names) {
                         (true, Ok(nast)) => {
-                            match_pattern(nast, expr, env)
+                            match_pattern(nast, expr, env, names)
                         }
                         (_, Err(err)) => Some(Err(err.to_string())),
                         _ => Some(Err(format!("Failed expanding pattern as macro")))
                     }
                 }
                 // _ => Some(Err(format!("Invalid pattern {:?}", pat.clone())))
-                _ => match macro_expand(pat.clone(), env.clone()) {
+                _ => match macro_expand(pat.clone(), env.clone(), names) {
                     (true, Ok(nast)) => {
-                        match_pattern(nast, expr, env)
+                        match_pattern(nast, expr, env, names)
                     }
                     (_, Err(err)) => Some(Err(err.to_string())),
                     _ => Some(Err(format!("Invalid pattern {:?}", pat.clone())))
@@ -529,7 +542,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env) -> Option<Result<HashMap<Str
 
 /// Evaluate an expression
 // fn eval(mut ast: Value, mut env: Env) -> ValueErr {
-fn eval(mut ast: Value, mut env: Env) -> ValueResult {
+fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
     // let ret: ValueErr;
     let ret: ValueResult;
 
@@ -540,7 +553,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                     return Ok(Value::Nil);
                 }
 
-                match macro_expand(ast.clone(), env.clone()) {
+                match macro_expand(ast.clone(), env.clone(), names) {
                     (true, Ok(nast)) => {
                         ast = nast;
                         continue 'tco;
@@ -552,35 +565,35 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
     
                 let head = &l[0];
                 match head {
-                    Value::Sym(sym) if sym == "quote" => 
+                    Value::Sym(sym) if sym == &stdname::QUOTE => 
                         if l.len() != 2 {
                             Err(arg_err!("quote"; 1; l.len()))
                         }else{
                             Ok(l[1].clone())
                         }
-                    Value::Sym(sym) if sym == "quasiquote" => 
+                    Value::Sym(sym) if sym == &stdname::QUASIQUOTE => 
                         if l.len() != 2 {
                             Err(arg_err!("quasiquote"; 1; l.len()))
                         }else{
                             ast = quasiquote(l[1].clone());
                             continue 'tco;
                         }
-                    Value::Sym(sym) if sym == "macro-expand" => macro_expand(l[1].clone(), env.clone()).1,
-                    Value::Sym(sym) if sym == "if" => 
+                    Value::Sym(sym) if sym == &stdname::MACRO_EXPAND => macro_expand(l[1].clone(), env.clone(), names).1,
+                    Value::Sym(sym) if sym == &stdname::IF => 
                         if l.len() != 4 {
                             Err(arg_err!("if"; 3; l.len()))
-                        }else if eval(l[1].clone(), env.clone())?.is_false() {
+                        }else if eval(l[1].clone(), env.clone(), names)?.is_false() {
                             ast = l[3].clone();
                             continue 'tco;
                         } else {
                             ast = l[2].clone();
                             continue 'tco;
                         }
-                    Value::Sym(sym) if sym == "cond" => {
+                    Value::Sym(sym) if sym == &stdname::COND => {
                         let mut res: ValueResult = Ok(Value::Nil);
                         for pair in l[1..].iter() {
                             res = if let Some((cond, expr)) = pair.to_pair() {
-                                if !eval(cond.clone(), env.clone())?.is_false() {
+                                if !eval(cond.clone(), env.clone(), names)?.is_false() {
                                     ast = expr.clone();
                                     continue 'tco;
                                 } else {
@@ -592,12 +605,12 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         };
                         res
                     }
-                    Value::Sym(sym) if sym == "match" => {
-                        let value = eval(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone())?;
+                    Value::Sym(sym) if sym == &stdname::MATCH => {
+                        let value = eval(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone(), names)?;
                         for pair in l[2..].iter() {
                             match pair.to_pair() {
                                 Some((pat, expr)) => {
-                                    match match_pattern(pat.clone(), value.clone(), env.clone()) {
+                                    match match_pattern(pat.clone(), value.clone(), env.clone(), names) {
                                         Some(res) => match res {
                                             Ok(binds) => {
                                                 let local_env = types::EnvStruct::new(Some(env.clone()));
@@ -618,10 +631,10 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         };
                         Err("No matching pattern found".into())
                     }
-                    Value::Sym(sym) if sym == "and" => {
+                    Value::Sym(sym) if sym == &stdname::AND => {
                         let mut res: ValueResult = Ok(Value::True);
                         for cond in l[1..].iter() {
-                            let expr = eval(cond.clone(), env.clone())?;
+                            let expr = eval(cond.clone(), env.clone(), names)?;
                             if expr.is_false() {
                                 res = Ok(expr);
                                 break;
@@ -629,10 +642,10 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         };
                         res
                     }
-                    Value::Sym(sym) if sym == "or" => {
+                    Value::Sym(sym) if sym == &stdname::OR => {
                         let mut res: ValueResult = Ok(Value::False);
                         for cond in l[1..].iter() {
-                            let expr = eval(cond.clone(), env.clone())?;
+                            let expr = eval(cond.clone(), env.clone(), names)?;
                             if !expr.is_false() {
                                 res = Ok(expr);
                                 break;
@@ -640,24 +653,24 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         };
                         res
                     }
-                    Value::Sym(sym) if sym == "def" => 
+                    Value::Sym(sym) if sym == &stdname::DEF => 
                         if l.len() < 3 {
                             // Err("def form requires 2 arguments".to_string())
                             Err(arg_err!("def"; 2; l.len()))
                         } else if let Value::Sym(s) = &l[1] {
-                            env.set(s.clone(), eval(l[2].clone(), env.clone())?);
+                            env.set(names.get(*s), eval(l[2].clone(), env.clone(), names)?);
                             Ok(Value::Nil)
                         } else {
                             // Err("Binding name must be a symbol".to_string())
                             Err(type_err!("symbol"; l[1].clone()))
                         }
-                    Value::Sym(sym) if sym == "struct" =>
+                    /*Value::Sym(sym) if sym == &stdname::STRUCT =>
                         if l.len() < 3 {
                             // Err("struct form requires 3 arguments".to_string())
                             Err(arg_err!("struct"; 2; l.len()))
                         } else if let Value::Sym(name) = &l[1] {
                             if let Some(fields) = &l[2].to_vec() {
-                                let mut ctor = vec![ vater!{(sym "make-struct")}, vater!{(quote (sym name))}];
+                                let mut ctor = vec![ vater!{(sym "make-struct")}, vater!{(QUOTE (sym name))}];
                                 ctor.extend_from_slice(&fields);
                                 let fields = match l[2].to_vec() {
                                     Some(ls) => ls,
@@ -720,14 +733,14 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             }
                         } else {
                             Err("Struct name must be a symbol".into())
-                        }
-                    Value::Sym(sym) if sym == "fun" =>
+                        }*/
+                    Value::Sym(sym) if sym == &stdname::FUN =>
                         if l.len() < 4 {
                             // Err("fun form requires 2 arguments".to_string())
                             Err(arg_err!("fun"; 3; l.len()))
                         } else if let Value::Sym(s) = &l[1] {
                             if let Some(params) = &l[2].to_vec() {
-                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone())?;
+                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone(), names)?;
                                 let func = Value::Func{
                                     env: env.clone(),
                                     eval,
@@ -737,12 +750,14 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         has_kwargs: key,
                                         rest_param: if let Some(s) = rest { Some(s) } else { None },
                                         ast: l[3].clone(),
-                                        name: Some(s.clone()),
+                                        // name: Some(s.clone()),
+                                        name: Some(names.get(*s)),
                                         arity,
                                     }),
                                     is_macro: false,
                                 };
-                                env.set(s.clone(), func);
+                                // env.set(s.clone(), func);
+                                env.set(names.get(*s), func);
                                 Ok(Value::Nil)
                             } else {
                                 // Err(format!("Lambda list must be a list found {}", l[2]))
@@ -752,13 +767,13 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             // Err("Binding name must be a symbol".to_string())
                             Err(type_err!("symbol"; l[1].clone()))
                         }
-                    Value::Sym(sym) if sym == "defmacro" =>
+                    Value::Sym(sym) if sym == &stdname::DEFMACRO =>
                         if l.len() < 4 {
                             // Err("defmacro form requires 3 arguments".to_string())
                             Err(arg_err!("defmacro"; 3; l.len()))
                         } else if let Value::Sym(s) = &l[1] {
                             if let Some(params) = &l[2].to_vec() {
-                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone())?;
+                                let (req, opt, key, rest, arity) = from_lambda_list((&**params).clone(), names)?;
                                 let func = Value::Func{
                                     env: env.clone(),
                                     eval,
@@ -768,12 +783,14 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         has_kwargs: key,
                                         rest_param: if let Some(s) = rest { Some(s) } else { None },
                                         ast: l[3].clone(),
-                                        name: Some(s.clone()),
+                                        // name: Some(s.clone()),
+                                        name: Some(names.get(*s)),
                                         arity,
                                     }),
                                     is_macro: true,
                                 };
-                                env.set(s.clone(), func);
+                                // env.set(s.clone(), func);
+                                env.set(names.get(*s), func);
                                 Ok(Value::Nil)
                             } else {
                                 // Err(format!("Lambda list must be a list found {}", l[2]))
@@ -783,14 +800,15 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             // Err("Binding name must be a symbol".to_string())
                             Err(type_err!("symbol"; l[1].clone()))
                         }
-                    Value::Sym(sym) if sym == "fn" => 
+                    Value::Sym(sym) if sym == &stdname::FN => 
                         if l.len() < 3 {
                             // Err("fn form requires 2 arguments".to_string())
                             Err(arg_err!("fn"; 2..; l.len()))
                         } else if let Some(params) = l[1].to_vec() {
-                            let mut body = vec![Value::Sym("block".to_string())];
+                            // let mut body = vec![Value::Sym("block".to_string())];
+                            let mut body = vec![Value::Sym(stdname::BLOCK)];
                             body.extend_from_slice(&l[2..]);
-                            let (req, opt, key, rest, arity) = from_lambda_list((&*params).clone())?;
+                            let (req, opt, key, rest, arity) = from_lambda_list((&*params).clone(), names)?;
                             Ok(Value::Func{
                                 env: env.clone(),
                                 eval,
@@ -808,7 +826,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         } else {
                             Err(type_err!("list"; l[1].clone()))
                         }
-                    Value::Sym(sym) if sym == "let" => {
+                    Value::Sym(sym) if sym == &stdname::LET => {
                         let len = l.len();
                         if len < 3 {
                             Err(arg_err!("let"; 2..; l.len()))
@@ -818,14 +836,15 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                 match pair.to_pair() {
                                     Some((name, value)) => {
                                         if let Value::Sym(name) = &name {
-                                            local_env.set(name.clone(), eval(value.clone(), local_env.clone())?)
+                                            // local_env.set(name.clone(), eval(value.clone(), local_env.clone(), names)?)
+                                            local_env.set(names.get(*name), eval(value.clone(), local_env.clone(), names)?)
                                         }
                                     }
                                     _ => return Err(pair_err!("let binding"))
                                 }
                             }
                             for expr in l[2..len-1].iter() {
-                                eval(expr.clone(), local_env.clone())?;
+                                eval(expr.clone(), local_env.clone(), names)?;
                             };
                             ast = l[len-1].clone();
                             env = local_env.clone();
@@ -834,7 +853,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             Err(type_err!("list"; l[1].clone()))
                         }
                     }
-                    Value::Sym(sym) if sym == "for" => {
+                    Value::Sym(sym) if sym == &stdname::FOR => {
                         let len = l.len();
                         if len == 1 {
                             return Ok(Value::Nil);
@@ -845,7 +864,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         for bind in l[1..len-1].iter() {
                             if let Some((name, value)) = bind.to_pair() {
                                 if let Value::Sym(name) = &name {
-                                    iters.insert(name.clone(), eval(value.clone(), env.clone())?);
+                                    // iters.insert(name.clone(), eval(value.clone(), env.clone(), names)?);
+                                    iters.insert(names.get(*name), eval(value.clone(), env.clone(), names)?);
                                 }
                             } else {
                                 return Err(pair_err!("for binding"))
@@ -860,16 +880,16 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                 }
                                 local_env.set(name.clone(), head);
                             }
-                            result.push(eval(l[len-1].clone(), local_env.clone())?);
+                            result.push(eval(l[len-1].clone(), local_env.clone(), names)?);
                             let mut new_iters: HashMap<String, Value> = HashMap::default();
                             for (name, iter) in iters.iter() {
-                                let tail = iter.rest()?;
+                                let tail = iter.rest(names)?;
                                 new_iters.insert(name.clone(), tail);
                             }
                             iters = new_iters;
                         }
                     }
-                    Value::Sym(sym) if sym == "module" => {
+                    Value::Sym(sym) if sym == &stdname::MODULE => {
                         let len = l.len();
                         if len < 2 {
                             // return Err("module form requires 1 argument".to_string())
@@ -889,18 +909,19 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             match &expr {
                                 Value::List(l) if l.len() > 0 => {
                                     match &l[0] {
-                                        Value::Sym(s) if s == "exports" => exports = (&l[1..]).to_vec(),
-                                        _ => {eval(expr.clone(), local_env.clone())?;}
+                                        Value::Sym(s) if s == &stdname::EXPORTS => exports = (&l[1..]).to_vec(),
+                                        _ => {eval(expr.clone(), local_env.clone(), names)?;}
                                     }
                                 }
-                                _ => {eval(expr.clone(), local_env.clone())?;}
+                                _ => {eval(expr.clone(), local_env.clone(), names)?;}
                             }
                             
                         };
                         for expr in exports {
                             match &expr {
                                 Value::Sym(s) => {
-                                    env.set(format!("{}/{}", mod_name, s), local_env.get(s.clone())?)
+                                    // env.set(format!("{}/{}", mod_name, s), local_env.get(s.clone())?)
+                                    env.set(format!("{}/{}", names.get(*mod_name), names.get(*s)), local_env.get(names.get(*s))?)
                                 }
                                 // _ => return Err("exported name is not an symbol".to_string())
                                 x => return Err(type_err!("symbol"; x.clone()))
@@ -909,8 +930,8 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
 
                         return Ok(Value::Nil);
                     }
-                    Value::Sym(sym) if sym == "exports" => Ok(Value::Nil),
-                    Value::Sym(sym) if sym == "import" => {
+                    Value::Sym(sym) if sym == &stdname::EXPORTS => Ok(Value::Nil),
+                    Value::Sym(sym) if sym == &stdname::IMPORT => {
                         let len = l.len();
                         if len < 3 {
                             // return Err("import form requires 1 argument".to_string())
@@ -929,7 +950,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             Value::List(l) => {
                                 modules = (*l).clone();
                                 l.iter().any(|i| match i {
-                                    Value::Str(s) => s == mod_name,
+                                    Value::Sym(s) => s == mod_name,
                                     _ => false
                                 })
                             },
@@ -955,8 +976,10 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             return Err("Couldn't open file".to_string().into())
                         }
 
+                        // let pool = NamePool::new();
+
                         let file_content = format!("({})", contents);
-                        let mut tk = parser::Reader::new(&file_content);
+                        let mut tk = parser::Reader::new(&file_content, names);
                         let exprs = if let Ok(tok) = tk.next_token() {
                             match match tk.parse_expr(tok) {
                                 parser::ParserResult::Expr(expr) => expr,
@@ -970,7 +993,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             return Err("Invalid Syntax".into())
                         };
 
-                        modules.push(Value::Str(mod_name.clone()));
+                        modules.push(Value::Sym(*mod_name));
                         env.assign("*modules*".to_string(), modules.into())?;
                         
 
@@ -980,18 +1003,19 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             match &expr {
                                 Value::List(l) if l.len() > 0 => {
                                     match &l[0] {
-                                        Value::Sym(s) if s == "exports" => exports = (&l[1..]).to_vec(),
-                                        _ => {eval(expr.clone(), local_env.clone())?;}
+                                        Value::Sym(s) if s == &stdname::EXPORTS => exports = (&l[1..]).to_vec(),
+                                        _ => {eval(expr.clone(), local_env.clone(), names)?;}
                                     }
                                 }
-                                _ => {eval(expr.clone(), local_env.clone())?;}
+                                _ => {eval(expr.clone(), local_env.clone(), names)?;}
                             }
                             
                         };
                         for expr in exports {
                             match &expr {
                                 Value::Sym(s) => {
-                                    env.set(format!("{}/{}", mod_name, s), local_env.get(s.clone())?)
+                                    // env.set(format!("{}/{}", mod_name, s), local_env.get(s.clone())?)
+                                    env.set(format!("{}/{}", names.get(*mod_name), names.get(*s)), local_env.get(names.get(*s))?)
                                 }
                                 // _ => return Err("exported name is not an symbol".to_string())
                                 x => return Err(type_err!("symbol"; x.clone()))
@@ -999,31 +1023,31 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         }
                         return Ok(Value::Nil);
                     }
-                    Value::Sym(sym) if sym == "block" => {
+                    Value::Sym(sym) if sym == &stdname::BLOCK => {
                         let len = l.len();
                         if len == 1 {
                             return Ok(Value::Nil);
                         }
 
                         for expr in l[1..len-1].iter() {
-                            eval(expr.clone(), env.clone())?;
+                            eval(expr.clone(), env.clone(), names)?;
                         };
                         ast = l[len-1].clone();
                         continue 'tco;
                     }
-                    Value::Sym(ref sym) if sym == "eval" => {
-                        ast = eval(l[1].clone(), env.clone())?;
+                    Value::Sym(ref sym) if sym == &stdname::EVAL => {
+                        ast = eval(l[1].clone(), env.clone(), names)?;
                         while let Some(ref e) = env.clone().access {
                             env = e.clone();
                         }
                         continue 'tco;
                     }
-                    Value::Sym(ref sym) if sym == "throw" => {
+                    Value::Sym(ref sym) if sym == &stdname::THROW => {
                         Err(error::Error::Throw(l.get(1).cloned()))
                     }
-                    Value::Sym(ref sym) if sym == "catch" => {
+                    Value::Sym(ref sym) if sym == &stdname::CATCH => {
                         if l.len() == 3 {
-                            match eval(l[1].clone(), env.clone()) {
+                            match eval(l[1].clone(), env.clone(), names) {
                                 Ok(val) => Ok(val),
                                 Err(_) => {
                                     ast = l[2].clone();
@@ -1031,13 +1055,13 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                 }
                             }
                         } else if l.len() == 4 {
-                            match eval(l[1].clone(), env.clone()) {
+                            match eval(l[1].clone(), env.clone(), names) {
                                 Ok(val) => Ok(val),
                                 Err(err) => {
                                     let local_env = types::EnvStruct::new(Some(env.clone()));
                                     if let Some((kind, value)) = &l[2].to_pair() {
-                                        let kind = kind.from_sym().ok_or(type_err!("symbol"; kind.clone()))?;
-                                        let value = value.from_sym().ok_or(type_err!("symbol"; value.clone()))?;
+                                        let kind = kind.from_sym(names).ok_or(type_err!("symbol"; kind.clone()))?;
+                                        let value = value.from_sym(names).ok_or(type_err!("symbol"; value.clone()))?;
                                         use error::Error::*;
                                         let sym = match err {
                                             Throw(val) => {
@@ -1061,7 +1085,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                                 local_env.set(value.clone(), vater!{ ([name]) }); "KwargsError"
                                             }
                                             TypeErr(ty, got) => {
-                                                local_env.set(value.clone(), vater!{ ([Value::Sym(ty.to_string())] [got.unwrap_or(Value::Nil)]) }); "TypeError"
+                                                local_env.set(value.clone(), vater!{ ([Value::Str(ty.to_string())] [got.unwrap_or(Value::Nil)]) }); "TypeError"
                                             }
                                             BindErr(name) => {
                                                 local_env.set(value.clone(), Value::Str(name)); "NameError"
@@ -1070,7 +1094,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                                 local_env.set(value.clone(), name.into()); "PairError"
                                             }
                                         };
-                                        local_env.set(kind.clone(), Value::Sym(sym.to_string()));
+                                        local_env.set(kind.clone(), Value::Str(sym.to_string()));
                                     } else {
                                         return Err(pair_err!("catch binding"))
                                     }
@@ -1084,12 +1108,12 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                             return Err(arg_err!("catch"; 2..3; l.len()))
                         }
                     }
-                    Value::Sym(ref sym) if sym == "lazy-cons" => {
+                    Value::Sym(ref sym) if sym == &stdname::LAZY_CONS => {
                         if l.len() < 3 {
                             // return Err("lazy-cons form requires 2 arguments".to_string())
                             return Err(arg_err!("lazy"; 2; l.len()))
                         }
-                        let head = eval(l[1].clone(), env.clone())?;
+                        let head = eval(l[1].clone(), env.clone(), names)?;
                         Ok(Value::Lazy{
                             eval, env,
                             head: Rc::new(head),
@@ -1100,8 +1124,9 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         if l.len() < 2 {
                             return Ok(Value::Nil)
                         }
-                        match eval(l[1].clone(), env.clone())? {
+                        match eval(l[1].clone(), env.clone(), names)? {
                             Value::Map(map) => {
+                                // match map.get(&names.get(*key)) {
                                 match map.get(key) {
                                     Some(val) => Ok(val.clone()),
                                     None => {
@@ -1121,7 +1146,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                         Value::List(v) =>  {
                             let mut list: Vec<Value> = vec![];
                             for expr in v.iter() {
-                                list.push(eval(expr.clone(), env.clone())?)
+                                list.push(eval(expr.clone(), env.clone(), names)?)
                             }
                             let ref func = list[0].clone();
                             let args = list[1..].to_vec();
@@ -1135,7 +1160,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                         // return Err(format!("Invalid arguments for {}, expected {} but found {}", f.name, f.arity, args.len()))
                                         return Err(error::Error::ArgErr(Some((*f.name).clone()), f.arity.clone(), args.len() as u16))
                                     }
-                                    match (f.func)(args) {
+                                    match (f.func)(args, names) {
                                         // Err(err) => Err(format!("{}\n\tat {}", err, f.name)),
                                         Err(err) => Err(format!("{}\n\tat {}", err, f.name).into()),
                                         Ok(x) => Ok(x)
@@ -1146,12 +1171,12 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                                 } => {
                                     let a = &(func).ast;
                                     let binds = &*func;
-                                    let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, *eval)?;
+                                    let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, *eval, names)?;
                                     ast = a.clone();
                                     env = local_env.clone();
                                     continue 'tco;
                                 },
-                                _ => Err(format!("Attempt to call non-function {}", func).into()),
+                                _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(func, 0, names)).into()),
                             }
                         }
                         // _ => Err("Expected a list".to_string())
@@ -1159,7 +1184,7 @@ fn eval(mut ast: Value, mut env: Env) -> ValueResult {
                     }
                 }
             }
-            _ => eval_ast(&ast, &env)
+            _ => eval_ast(&ast, &env, names)
         };
         break;
     }
@@ -1182,6 +1207,7 @@ fn arg_parse(mut args: env::Args) -> (u8, Vec<String>) {
 
 fn main() {
     let repl_env = types::EnvStruct::new(None);
+    let pool = NamePool::new();
 
     // add functions from core to the environment
     for (k, v) in core::ns() {
@@ -1191,28 +1217,68 @@ fn main() {
     repl_env.set("*modules*".to_string(), Value::Nil);
     repl_env.set("nil".to_string(), Value::Nil);
 
-    eval(vater!{
-        (fun enumerate (seq (: opt) (n 0f64))
-            (if seq ((sym "lazy-cons") (list n (head seq)) (enumerate (tail seq) (inc n))) nil))
-    }, repl_env.clone()).unwrap();
+    // eval(vater!{
+    //     (fun enumerate (seq (: OPT) (n 0f64))
+    //         (if seq ((sym "lazy-cons") (list n (head seq)) (enumerate (tail seq) (inc n))) nil))
+    // }, repl_env.clone(), &pool).unwrap();
+    
+    // eval(vater!{
+    //     (defmacro loop (name binds body)
+    //         (quasiquote (block
+    //             (fun (unquote name) (unquote (for (bind binds) (first bind)))
+    //                 (unquote body))
+    //             ((unquote name) ((sym "unquote-splicing") (for (bind binds) (second bind)))))))
+    // }, repl_env.clone(), &pool).unwrap();
 
-    eval(vater!{
-        (defmacro loop (name binds body)
-            (quasiquote (block
-                (fun (unquote name) (unquote (for (bind binds) (first bind)))
-                    (unquote body))
-                ((unquote name) ((sym "unquote-splicing") (for (bind binds) (second bind)))))))
-    }, repl_env.clone()).unwrap();
+    // eval(vater!{
+    //     (defmacro printf (fmt (: REST) args)
+    //         (quasiquote (println (format (unquote fmt) ((sym "unquote-splicing") args)))))
+    // }, repl_env.clone(), &pool).unwrap();
 
-    eval(vater!{
-        (defmacro printf (fmt (: rest) args)
-            (quasiquote (println (format (unquote fmt) ((sym "unquote-splicing") args)))))
-    }, repl_env.clone()).unwrap();
+    // eval(vater!{
+    //     (defmacro run (name)
+    //         (quasiquote (eval (read (str "(block\n" ((sym "read-file") (unquote name)) "\n)")))))
+    // }, repl_env.clone(), &pool).unwrap();
 
-    eval(vater!{
-        (defmacro run (name)
-            (quasiquote (eval (read (str "(block\n" ((sym "read-file") (unquote name)) "\n)")))))
-    }, repl_env.clone()).unwrap();
+    // eval(vater!{
+    //     (FUN (sym enumerate; &pool) ((sym seq; &pool) (: OPT) (n 0f64))
+    //         (IF seq ((sym "lazy-cons") (LIST n (head seq)) (enumerate (tail seq) (inc n))) nil))
+    // }, repl_env.clone(), &pool).unwrap();
+
+    {
+        let name_loop = pool.add("loop");
+        let name_printf = pool.add("printf");
+        let name_run = pool.add("run");
+
+        let name_println = pool.add("println");
+        let name_format = pool.add("format");
+        let name_eval = pool.add("eval");
+        let name_read = pool.add("read");
+        let name_read_file = pool.add("read-file");
+
+        let name_a = pool.add("#a");
+        let name_b = pool.add("#b");
+        let name_c = pool.add("#c");
+        let name_d = pool.add("#d");
+        
+        eval(vater!{
+            (DEFMACRO [name_loop] ([name_a] [name_b] [name_c])
+                (QUASIQUOTE (BLOCK
+                    (FUN (UNQUOTE [name_a]) (UNQUOTE (FOR ([name_d] [name_b]) (FIRST [name_d])))
+                        (UNQUOTE [name_c]))
+                    ((UNQUOTE [name_a]) (UNQUOTE_SPLICING (FOR ([name_d] [name_b]) (SECOND [name_d])))))))
+        }, repl_env.clone(), &pool).unwrap();
+    
+        eval(vater!{
+            (DEFMACRO [name_printf] ([name_a] (: REST) [name_b])
+                (QUASIQUOTE ([name_println] ([name_format] (UNQUOTE [name_a]) (UNQUOTE_SPLICING [name_b])))))
+        }, repl_env.clone(), &pool).unwrap();
+    
+        eval(vater!{
+            (DEFMACRO [name_run] ([name_a])
+                (QUASIQUOTE ([name_eval] ([name_read] (STR "(block\n" ([name_read_file] (UNQUOTE [name_a])) "\n)")))))
+        }, repl_env.clone(), &pool).unwrap();
+    }
     
     let (flags, args) = arg_parse(env::args());
 
@@ -1237,7 +1303,7 @@ fn main() {
                 input.push_str(&full_input);
                 io::stdin().read_line(&mut input).expect("Couldn't read input");
             
-                let mut reader = parser::Reader::new(&input);
+                let mut reader = parser::Reader::new(&input, &pool);
                 let val = match reader.parse_form() {
                     (false, Err(err)) => {
                         done = true;
@@ -1258,10 +1324,10 @@ fn main() {
                     }
                 };
                 match val {
-                    Value::Sym(x) if x == "exit" => break,
-                    _ => match eval(val, repl_env.clone()) {
+                    Value::Sym(x) if x == stdname::EXIT => break,
+                    _ => match eval(val, repl_env.clone(), &pool) {
                         // Ok(e) => println!("{:?}", &e),
-                        Ok(e) => println!("{}", types::Printer::repr_color(&e, 0)),
+                        Ok(e) => println!("{}", Printer::repr_color(&e, 0, &pool)),
                         // Err(err) => println!("Error: {}", err)
                         Err(err) => println!("\x1b[31mError: {}\x1b[0m", err)
                     }
@@ -1287,6 +1353,8 @@ fn main() {
 
             let file = File::open(filename);
 
+            // let mut pool = NamePool::new();
+
             let mut contents = String::from("(block ");
             if let Ok(mut file) = file {
                 match file.read_to_string(&mut contents) {
@@ -1298,7 +1366,7 @@ fn main() {
                 }
                 contents.push_str("\n)");
 
-                let mut tk = parser::Reader::new(&contents);
+                let mut tk = parser::Reader::new(&contents, &pool);
                 let tok = match tk.next_token() {
                     Ok(tok) => tok,
                     Err(err) => {
@@ -1322,7 +1390,7 @@ fn main() {
                         return;
                     },
                 };
-                match eval(val, repl_env.clone()) {
+                match eval(val, repl_env.clone(), &pool) {
                     Ok(e) => if flags & 1 != 0 {println!("{:?}", e)},
                     Err(err) => println!("Error: {}", err),
                 }

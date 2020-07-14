@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
 use crate::error::{Error};
+use crate::printer::Printer;
+use crate::names::{Name, NamePool};
 
 pub struct FuncData {
     pub ast: Value,
@@ -24,7 +26,7 @@ pub enum Arity {
 pub struct NatFunc {
     pub name: Rc<String>,
     pub arity: Arity,
-    pub func: fn(Vec<Value>) -> Result<Value, Error>
+    pub func: fn(Vec<Value>, &NamePool) -> Result<Value, Error>
 }
 
 /// Enum for the types used by vaterite
@@ -45,9 +47,11 @@ pub enum Value {
     /// String value
     Str(String),
     /// Symbol value, used to bind a value to env
-    Sym(String),
+    // Sym(String),
+    Sym(Name),
     /// Keyword value, like symbols that evaluate to themselves
-    Keyword(String),
+    Keyword(Name),
+    // Keyword(String),
     /// List value, the basic container of vaterite
     List(Rc<Vec<Value>>),
     /// Native function are used to define functions in rust that can be used in vaterite
@@ -55,7 +59,7 @@ pub enum Value {
     /// Vaterite function, defined by vaterite code
     Func {
         env: Env,
-        eval: fn(Value, Env) -> Result<Value, Error>,
+        eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
         func: Rc<FuncData>,
         is_macro: bool,
     },
@@ -64,22 +68,23 @@ pub enum Value {
     /// Lazy is used to implement lazy sequences
     Lazy{
         env: Env,
-        eval: fn(Value, Env) -> Result<Value, Error>,
+        eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
         head: Rc<Value>,
         tail: Rc<Value>
     },
-    Map(Rc<HashMap<String,Value>>),
+    // Map(Rc<HashMap<String,Value>>),
+    Map(Rc<HashMap<Name, Value>>),
     Struct(Rc<String>, Rc<Vec<Value>>)
 }
 
 pub type ValueList = Vec<Value>;
 type ValueResult = Result<Value, Error>;
 
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", Printer::str_(self))
-    }
-}
+// impl std::fmt::Display for Value {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         write!(f, "{}", Printer::str_(self))
+//     }
+// }
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -106,7 +111,7 @@ impl PartialEq for Value {
             (Chars(a), Nil) => a.len() == 0,
             (Nil, Chars(a)) => a.len() == 0,
             (Func{func: a, ..}, Func{func: b, ..}) => Rc::ptr_eq(a, b),
-            (NatFunc(a), NatFunc(b)) => a.func == b.func,
+            (NatFunc(a), NatFunc(b)) => a.name == b.name,
             (Box(a), Box(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
@@ -115,6 +120,7 @@ impl PartialEq for Value {
 
 impl From<&str> for Value { fn from(string: &str) -> Self { Value::Str(string.to_string()) }}
 impl From<String> for Value { fn from(string: String) -> Self { Value::Str(string) }}
+impl From<Name> for Value { fn from(name: Name) -> Self { Value::Sym(name) }}
 impl From<f64> for Value { fn from(number: f64) -> Self { Value::Num(number) }}
 impl From<bool> for Value { fn from(b: bool) -> Self { if b { Value::True } else { Value::False }}}
 impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(Rc::new(ls)) }}}
@@ -132,7 +138,7 @@ impl<T> From<Option<T>> for Value
 
 impl Value {
     /// Apply arguments to a vaterite expression that must be a function
-    pub fn apply(&self, args: ValueList) -> ValueResult {
+    pub fn apply(&self, args: ValueList, names: &NamePool) -> ValueResult {
         match self {
             Value::NatFunc(f) => {
                 if !match f.arity {
@@ -142,7 +148,7 @@ impl Value {
                 } {
                     return Err(Error::ArgErr(Some((*f.name).clone()), f.arity.clone(), args.len() as u16))
                 }
-                match (f.func)(args) {
+                match (f.func)(args, names) {
                     Err(err) => Err(format!("{}\n\tat {}", err, f.name).into()),
                     Ok(x) => Ok(x)
                 }
@@ -152,13 +158,13 @@ impl Value {
             } => {
                 let ast = &(**func).ast;
                 let binds = &*func;
-                let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval)?;
-                return Ok(match eval(ast.clone(), local_env) {
+                let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval, names)?;
+                return Ok(match eval(ast.clone(), local_env, names) {
                     Ok(val) => val,
                     Err(err) => return Err(format!("{}\n\tat {}", err, (func.name).as_ref().unwrap_or(&"lambda".to_string())).into())
                 })
             },
-            _ => Err(format!("Attempt to call non-function {}", self).into()),
+            _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(self, 0, names)).into()),
         }
     }
 
@@ -200,7 +206,7 @@ impl Value {
         }
     }
 
-    pub fn rest(&self) -> ValueResult {
+    pub fn rest(&self, names: &NamePool) -> ValueResult {
         match self {
             Value::List(l) => {
                 if l.len() == 0 {
@@ -210,7 +216,7 @@ impl Value {
                 }
             },
             Value::Nil => Ok(Value::Nil),
-            Value::Lazy{env, eval, tail, ..} => eval((**tail).clone(), env.clone()),
+            Value::Lazy{env, eval, tail, ..} => eval((**tail).clone(), env.clone(), names),
             Value::Chars(s) => if s.len() != 1 {
                 Ok(Value::Chars(s[1..].into()))
             } else {
@@ -236,16 +242,16 @@ impl Value {
         }
     }
 
-    pub fn from_sym(&self) -> Option<String> {
+    pub fn from_sym(&self, names: &NamePool) -> Option<String> {
         match &self {
-            Value::Sym(s) => Some(s.clone()),
+            Value::Sym(s) => Some(names.get(*s)),
             _ => None
         }
     }
 }
 
 /// Helper to make native functions
-pub fn func(name: &str, arity: Arity, func: fn(ValueList) -> Result<Value, Error>) -> Value {
+pub fn func(name: &str, arity: Arity, func: fn(ValueList, &NamePool) -> Result<Value, Error>) -> Value {
     Value::NatFunc(NatFunc {
         name: Rc::new(String::from(name)),
         func,
@@ -264,7 +270,7 @@ impl std::fmt::Display for Arity {
 }
 
 /// An vaterite environment maps expressions to strings
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EnvStruct {
     pub data: RefCell<HashMap<String, Value>>,
     pub access: Option<Env>,
@@ -273,13 +279,14 @@ pub struct EnvStruct {
 impl EnvStruct {
     /// Creates a new environment optionaly with another environment to access
     pub fn new(access: Option<Env>) -> Env {
-        Rc::new(EnvStruct{
-            access, data: RefCell::new(HashMap::default())
+        Rc::new(EnvStruct {
+            access,
+            data: RefCell::new(HashMap::default())
         })
     }
 
     /// Creates a new environment and bind values acordingly to a lambda list
-    pub fn bind(access: Option<Env>, binds: &FuncData, exprs: ValueList, eval: fn(Value, Env) -> ValueResult) -> Result<Env, Error> {
+    pub fn bind(access: Option<Env>, binds: &FuncData, exprs: ValueList, eval: fn(Value, Env, &NamePool) -> ValueResult, names: &NamePool) -> Result<Env, Error> {
         let env = EnvStruct::new(access);
         let (req, opt, keys, rest) = (&binds.params, &binds.opt_params, &binds.has_kwargs, &binds.rest_param);
         let req_len = req.len();
@@ -308,13 +315,13 @@ impl EnvStruct {
                 let key = &b.0;
                 for i in (0..exprs.len()).step_by(2) {
                     if let Value::Keyword(kw) = &exprs[i] {
-                        if key == kw {
+                        if key == &names.get(*kw) {
                             env.set(key.clone(), exprs[i + 1].clone());
                             continue 'next_key;
                         }
                     }
                 }
-                env.set(key.clone(), eval(b.1.clone(), env.clone())?);
+                env.set(key.clone(), eval(b.1.clone(), env.clone(), names)?);
             }
         } else {
             for (i, b) in opt.iter().enumerate() {
@@ -323,7 +330,7 @@ impl EnvStruct {
                         env.set(b.0.clone(), expr.clone());
                     }
                     None => {
-                        env.set(b.0.clone(), eval(b.1.clone(), env.clone())?);
+                        env.set(b.0.clone(), eval(b.1.clone(), env.clone(), names)?);
                     }
                 }
             }
@@ -375,180 +382,3 @@ impl EnvStruct {
 }
 
 pub type Env = Rc<EnvStruct>;
-
-pub struct Printer {}
-
-impl Printer {
-    pub fn repr_(value: &Value, level: i32) -> String {
-        match value {
-            Value::Nil => format!("()"),
-            Value::True => format!("#t"),
-            Value::False => format!("#f"),
-            Value::Num(n) => format!("{}", n),
-            Value::Str(s) => format!("{:?}", s),
-            Value::Char(s) => format!("#{:?}", s),
-            Value::Chars(s) => format!("{:?}", s),
-            Value::Sym(s) => if level == 0 {
-                    format!("'{}", s)
-                } else {
-                    format!("{}", s)
-                },
-            Value::Keyword(s) => format!(":{}", s),
-            Value::List(list) => {
-                let mut res = String::new();
-                if level == 0 {
-                    res.push('\'');
-                };
-                res.push('(');
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_(x, level + 1)));
-                }
-                for expr in it {
-                    res.push_str(&format!(" {}", Printer::repr_(expr, level + 1)));
-                }
-                res.push_str(")");
-                res
-            },
-            Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("[Function {}]", name)
-            } else {
-                format!("[Function]")
-            },
-            Value::Box(val) => format!("(box {})", Printer::repr_(&(val.borrow()), level)),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_(&*head, level), tail),
-            Value::Map(map) => {
-                let mut res = String::new();
-                res.push_str("#[\n");
-                for (k, v) in map.iter() {
-                    res.push_str(&format!("{}:{} {}\n", (0..level+1).map(|_| "  ").collect::<String>(), k, Printer::repr_(v, level+1)));
-                };
-                res.push_str(&format!("{}]", (0..level).map(|_| "  ").collect::<String>()));
-                res
-            }
-            Value::Struct(id, list) => {
-                let mut res = String::new();
-                res.push_str(&format!("({} ", id));
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_(x, level + 1)))
-                }
-                for expr in it {
-                    res.push_str(&format!(" {}", Printer::repr_(expr, level + 1)))
-                }
-                res.push_str("]");
-                res
-            }
-        }
-    }
-
-    pub fn repr_color(value: &Value, level: i32) -> String {
-        match value {
-            Value::Nil => format!("()"),
-            Value::True => format!("\x1b[95m#t\x1b[0m"),
-            Value::False => format!("\x1b[95m#f\x1b[0m"),
-            Value::Num(n) => format!("\x1b[93m{}\x1b[0m", n),
-            Value::Str(s) => format!("\x1b[32m{:?}\x1b[0m", s),
-            Value::Char(s) => format!("\x1b[93m#{:?}\x1b[0m", s),
-            Value::Chars(s) => format!("{:?}", s),
-            Value::Sym(s) => if level == 0 {
-                    format!("'{}", s)
-                } else {
-                    format!("{}", s)
-                },
-            Value::Keyword(s) => format!("\x1b[32m:{}\x1b[0m", s),
-            Value::List(list) => {
-                let mut res = String::new();
-                if level == 0 {
-                    res.push('\'');
-                };
-                res.push('(');
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_color(x, level + 1)));
-                }
-                for expr in it {
-                    res.push_str(&format!(" {}", Printer::repr_color(expr, level + 1)));
-                }
-                res.push_str(")");
-                res
-            },
-            Value::NatFunc(func) => format!("\x1b[36m[NativeFunction {}]\x1b[0m", func.name),
-            Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("\x1b[36m[Function {}]\x1b[0m", name)
-            } else {
-                format!("\x1b[36m[Function]\x1b[0m")
-            },
-            Value::Box(val) => format!("(box {})", Printer::repr_color(&(val.borrow()), level)),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_color(&*head, level), tail),
-            Value::Map(map) => {
-                let mut res = String::new();
-                res.push_str("#[\n");
-                for (k, v) in map.iter() {
-                    res.push_str(&format!("{}:{} {}\n", (0..level+1).map(|_| "  ").collect::<String>(), k, Printer::repr_color(v, level+1)));
-                };
-                res.push_str(&format!("{}]", (0..level).map(|_| "  ").collect::<String>()));
-                res
-            }
-            Value::Struct(id, list) => {
-                let mut res = String::new();
-                res.push_str(&format!("({} ", id));
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_color(x, level + 1)))
-                }
-                for expr in it {
-                    res.push_str(&format!(" {}", Printer::repr_color(expr, level + 1)))
-                }
-                res.push_str("]");
-                res
-            }
-        }
-    }
-
-    pub fn str_(value: &Value) -> String {
-        match value {
-            Value::Nil => format!("()"),
-            Value::True => format!("#t"),
-            Value::False => format!("#f"),
-            Value::Num(n) => format!("{}", n),
-            Value::Str(s) => format!("{}", s),
-            Value::Char(s) => format!("{}", s),
-            Value::Chars(s) => format!("{:?}", s),
-            Value::Sym(s) => format!("{}", s),
-            Value::Keyword(s) => format!(":{}", s),
-            Value::List(list) => {
-                let mut res = String::new();
-                res.push('(');
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::str_(x)));
-                }
-                for expr in it {
-                    res.push_str(&format!(" {}", Printer::str_(expr)));
-                }
-                res.push_str(")");
-                res
-            },
-            Value::NatFunc(_) => format!("[NativeFunction]"),
-            Value::Func { func, .. } => if let Some(name) = &func.name {
-                format!("[Function {}]", name)
-            } else {
-                format!("[Function]")
-            },
-            Value::Box(val) => format!("(box {})", Printer::str_(&(val.borrow()))),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {:?})", Printer::str_(&*head), tail),
-            Value::Map(map) => {
-                let mut res = String::new();
-                res.push_str("#[ ");
-                for (k, v) in map.iter() {
-                    res.push_str(&format!(":{} {} ", k, Printer::str_(v)));
-                };
-                res.push_str("]");
-                res
-            }
-            Value::Struct(id, _) => format!("[Struct {}]", id)
-        }
-    }
-}
