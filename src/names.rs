@@ -1,14 +1,18 @@
 use std::cell::RefCell;
 
+/*
+1-7	1
+8-11	2
+12-25	3
+16-23	4
+24-31	5
+32>	6
+
+*/
+
 /// Interned name id
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Name(pub i32);
-
-// impl std::fmt::Display for Name {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         write!(f, "{}", self.0)
-//     }
-// }
 
 /// Stores the interned names (aka hospital)
 pub struct NamePool {
@@ -40,6 +44,10 @@ impl NamePool {
             return s.to_string()
         }
         self.names.borrow().get(name.0 as usize).unwrap_or(&"[invalid name]".to_string()).clone()
+    }
+
+    pub fn name_vec_size(&self) -> usize {
+        self.names.borrow().len()
     }
 }
 
@@ -122,4 +130,9 @@ buitin_names! {
     "exit" => EXIT = -51,
     "." => DOT_ = -52,
     "assert" => ASSERT = -53,
+    "*modules*" => SP_MODULES = -54,
+    "*dir-name*" => SP_DIR_NAME = -55,
+    "loop" => LOOP = -56,
+    "format" => FORMAT = -57,
+    "assoc" => ASSOC = -58,
 }

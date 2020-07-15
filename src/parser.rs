@@ -5,33 +5,19 @@ use std::rc::Rc;
 use crate::types::{Value, ValueList};
 use crate::names::{NamePool};
 
-// #[macro_export]
-// macro_rules! list {
-//     [ $($args:expr),* ] => {{
-//         let vec: Vec<Value> = vec![$($args),*];
-//         Value::List(Rc::new(vec))
-//     }}
-// }
-
 macro_rules! vater_args {
     ( $($rest:tt)* ) => { vater!( $($rest)* ) };
 }
 
 #[macro_export]
 macro_rules! vater {
-    // { (sym $id:expr) } => { Value::Sym($id.to_string()) };
     { (sym $id:expr) } => { Value::Sym(get_builtin_name($id).unwrap()) };
     { (sym $id:ident; $names:expr ) } => { Value::Sym($names.add(stringify!($id))) };
-    
-    // { (: $id:ident) } => { Value::Keyword(stringify!($id).to_string()) };
     { (: $id:ident) } => { Value::Keyword(names::builtin::$id) };
-    // { [ $val:expr ] } => { $val };
     { [ $val:expr ] } => { Value::from($val) };
-    // { [ from $val:expr ] } => { Value::from($val) };
     { [list $ls:expr ] } => { Value::List(Rc::new($ls)) };
     { ( $($exprs:tt)* ) } => { Value::List(Rc::new(vec![ $(vater_args!($exprs)),* ])) };
     { nil } => { Value::Nil };
-    // { $id:ident } => { Value::Sym( stringify!($id).to_string() ) };
     { $id:ident } => { Value::Sym( crate::names::builtin::$id ) };
     { $val:expr } => { Value::from($val) };
 }
@@ -135,7 +121,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                             }
                         }
                         None => return reader_err!("Unexpected end of input reading unquote", self.current_line),
-                        // None => return Err(ReaderError{err: "Unexpected end of input reading unquote".to_string(), line: self.current_line}),
                     }
                     '`' => return Ok(Token::Backquote),
                     '~' => return Ok(Token::Tilde),
@@ -176,7 +161,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                                         }
                                         None => return reader_err!("Unexpected end of input reading string", self.current_line),
                                     }
-                                    // '\n' => return reader_err!("Unexpected line break reading string", self.current_line),
                                     c => res.push(c)
                                 }
                                 None => return reader_err!("Unexpected end of input reading string", self.current_line),
@@ -250,24 +234,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                                 }
                                 _ => return Ok(Token::Macro("macro-expand".to_string()))
                             }
-                            // if *c == '[' {
-                            //     self.chars.next();
-                            //     return Ok(Token::HashBrack)
-                            // }else if *c == '#' {
-                            //     self.chars.next();
-                            //     let chr = match self.chars.next() {
-                            //         Some(c) => c,
-                            //         None => return reader_err!("Unexpected end of input reading reader macro", self.current_line)
-                            //     };
-                            //     match self.read_symbol(chr) {
-                            //         Ok(sym) => return Ok(Token::Macro(sym)),
-                            //         Err(err) => return reader_err!(err, self.current_line)
-                            //     }
-                            //     //self.chars.next();
-                            //     //return Ok(Token::HashBrack)
-                            // }else{
-                            //     return Ok(Token::Quote)
-                            // }
                         }
                         None => return reader_err!("Unexpected end of input reading hash syntax", self.current_line),
                     }
@@ -414,7 +380,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                //Ok(list![Value::Sym("quote".to_string()), val])
                 ParserResult::Expr(vater!{ (QUOTE [val]) })
             },
             Token::Backquote => {
@@ -423,7 +388,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                // Ok(list![Value::Sym("quasiquote".to_string()), val])
                 ParserResult::Expr(vater!{ (QUASIQUOTE [val]) })
             },
             Token::Comma => {
@@ -432,7 +396,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                // Ok(list![Value::Sym("unquote".to_string()), val])
                 ParserResult::Expr(vater!{ (UNQUOTE [val]) })
             }
             Token::CommaAt => {
@@ -441,7 +404,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                // Ok(list![Value::Sym("unquote-splicing".to_string()), val])
                 ParserResult::Expr(vater!{ (UNQUOTE_SPLICING [val]) })
             },
             Token::Tilde => {
@@ -450,7 +412,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                // Ok(list![Value::Sym("deref".to_string()), val])
                 ParserResult::Expr(vater!{ (DEREF [val]) })
             },
             Token::Macro(s) => {
@@ -459,7 +420,6 @@ impl<'a, 'h> Reader<'a, 'h> {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                // Ok(list![Value::Sym(s), val])
                 let name = self.names.add(&s);
                 ParserResult::Expr(vater!{ ([name] [val]) })
             },
@@ -481,9 +441,7 @@ impl<'a, 'h> Reader<'a, 'h> {
             Token::Number(n) => ParserResult::Expr(Value::Num(n)),
             Token::Char(c) => ParserResult::Expr(Value::Char(c)),
             Token::String(s) => ParserResult::Expr(Value::Str(s)),
-            // Token::Symbol(s) => ParserResult::Expr(Value::Sym(s)),
             Token::Symbol(s) => ParserResult::Expr(Value::Sym(self.names.add(&s))),
-            // Token::Keyword(s) => ParserResult::Expr(Value::Keyword(s)),
             Token::Keyword(s) => ParserResult::Expr(Value::Keyword(self.names.add(&s))),
             _ => ParserResult::TokenErr("Invalid Syntax: Unexpected Token".to_string())
         }

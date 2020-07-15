@@ -24,7 +24,7 @@ pub enum Arity {
 
 #[derive(Clone)]
 pub struct NatFunc {
-    pub name: Rc<String>,
+    pub name: Name,
     pub arity: Arity,
     pub func: fn(Vec<Value>, &NamePool) -> Result<Value, Error>
 }
@@ -47,11 +47,9 @@ pub enum Value {
     /// String value
     Str(String),
     /// Symbol value, used to bind a value to env
-    // Sym(String),
     Sym(Name),
     /// Keyword value, like symbols that evaluate to themselves
     Keyword(Name),
-    // Keyword(String),
     /// List value, the basic container of vaterite
     List(Rc<Vec<Value>>),
     /// Native function are used to define functions in rust that can be used in vaterite
@@ -79,18 +77,6 @@ pub enum Value {
 
 pub type ValueList = Vec<Value>;
 type ValueResult = Result<Value, Error>;
-
-// impl std::fmt::Display for Value {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         write!(f, "{}", Printer::str_(self))
-//     }
-// }
-
-impl std::fmt::Debug for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", Printer::repr_(self, 0))
-    }
-}
 
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
@@ -146,10 +132,10 @@ impl Value {
                     Arity::Min(n) => args.len() >= n.into(),
                     Arity::Range(min, max) => min as usize <= args.len() && args.len() <= max.into(),
                 } {
-                    return Err(Error::ArgErr(Some(names.add(&*f.name)), f.arity.clone(), args.len() as u16))
+                    return Err(Error::ArgErr(Some(f.name), f.arity.clone(), args.len() as u16))
                 }
                 match (f.func)(args, names) {
-                    Err(err) => Err(format!("{}\n\tat {}", err, f.name).into()),
+                    Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(f.name)).into()),
                     Ok(x) => Ok(x)
                 }
             },
@@ -162,12 +148,12 @@ impl Value {
                 return Ok(match eval(ast.clone(), local_env, names) {
                     Ok(val) => val,
                     Err(err) => return match func.name {
-                        Some(name) => Err(format!("{}\n\tat {}", err, names.get(name)).into()),
-                        None => Err(format!("{}\n\tat lambda", err).into())
+                        Some(name) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(name)).into()),
+                        None => Err(format!("{}\n\tat lambda", Printer::str_error(&err, names)).into())
                     }
                 })
             },
-            _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(self, 0, names)).into()),
+            _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(self, names)).into()),
         }
     }
 
@@ -200,11 +186,9 @@ impl Value {
             Value::Nil => Ok(Value::Nil),
             Value::Lazy{head, ..} => Ok((**head).clone()),
             Value::Chars(s) => match s.get(0) {
-                // Some(ch) => Ok(Value::Num(*ch as i32 as f64)),
                 Some(ch) => Ok(Value::Char(*ch)),
                 None => Ok(Value::Nil)
             },
-            // _ => Err("Value is not a ordered collection".to_string()),
             x => Err(Error::TypeErr("collection", Some(x.clone()))),
         }
     }
@@ -225,7 +209,6 @@ impl Value {
             } else {
                 Ok(Value::Nil)
             },
-            // _ => Err("Value is not a ordered collection".to_string()),
             x => Err(Error::TypeErr("collection", Some(x.clone())))
         }
     }
@@ -244,22 +227,11 @@ impl Value {
             _ => None
         }
     }
-
-    pub fn from_sym(&self, names: &NamePool) -> Option<String> {
-        match &self {
-            Value::Sym(s) => Some(names.get(*s)),
-            _ => None
-        }
-    }
 }
 
 /// Helper to make native functions
-pub fn func(name: &str, arity: Arity, func: fn(ValueList, &NamePool) -> Result<Value, Error>) -> Value {
-    Value::NatFunc(NatFunc {
-        name: Rc::new(String::from(name)),
-        func,
-        arity,
-    })
+pub fn func(name: Name, arity: Arity, func: fn(ValueList, &NamePool) -> Result<Value, Error>) -> Value {
+    Value::NatFunc(NatFunc { name, func, arity })
 }
 
 impl std::fmt::Display for Arity {
@@ -275,7 +247,7 @@ impl std::fmt::Display for Arity {
 /// An vaterite environment maps expressions to strings
 #[derive(Clone)]
 pub struct EnvStruct {
-    pub data: RefCell<HashMap<String, Value>>,
+    pub data: RefCell<HashMap<Name, Value>>,
     pub access: Option<Env>,
 }
 
@@ -305,13 +277,12 @@ impl EnvStruct {
         }
 
         if *keys && (args_len - req_len) % 2 != 0 {
-            return Err(Error::KwArgErr(binds.name.map(|n| names.get(n))))
+            return Err(Error::KwArgErr(binds.name))
         }
 
         for (i, b) in req.iter().enumerate() {
-            env.set(names.get(*b), exprs[i].clone());
+            env.set(*b, exprs[i].clone());
         }
-        // let exprs = exprs[req_len..].to_vec();
         let exprs = &exprs[req_len..];
         if *keys {
             'next_key: for (_, b) in opt.iter().enumerate() {
@@ -319,37 +290,37 @@ impl EnvStruct {
                 for i in (0..exprs.len()).step_by(2) {
                     if let Value::Keyword(kw) = &exprs[i] {
                         if key == kw {
-                            env.set(names.get(*key), exprs[i + 1].clone());
+                            env.set(*key, exprs[i + 1].clone());
                             continue 'next_key;
                         }
                     }
                 }
-                env.set(names.get(*key), eval(b.1.clone(), env.clone(), names)?);
+                env.set(*key, eval(b.1.clone(), env.clone(), names)?);
             }
         } else {
-            for (i, b) in opt.iter().enumerate() {
+            for (i, (name, value)) in opt.iter().enumerate() {
                 match exprs.get(i) {
                     Some(expr) => {
-                        env.set(names.get(b.0), expr.clone());
+                        env.set(*name, expr.clone());
                     }
                     None => {
-                        env.set(names.get(b.0), eval(b.1.clone(), env.clone(), names)?);
+                        env.set(*name, eval(value.clone(), env.clone(), names)?);
                     }
                 }
             }
         }
         if let Some(rest) = rest {
             if exprs.len() > opt_len {
-                env.set(names.get(*rest), exprs[opt_len..].to_vec().into());
+                env.set(*rest, exprs[opt_len..].to_vec().into());
             } else {
-                env.set(names.get(*rest), Value::Nil);
+                env.set(*rest, Value::Nil);
             }
         };
         Ok(env)
     }
 
     /// Get an binding from the environment
-    pub fn get(&self, key: String) -> ValueResult {
+    pub fn get(&self, key: Name) -> ValueResult {
         match self.data.borrow().get(&key) {
             Some(e) => Ok(e.clone()),
             None => {
@@ -359,7 +330,6 @@ impl EnvStruct {
                         Err(err) => Err(err)
                     }
                 }else {
-                    // Err(format!("'{}' not found", key))
                     Err(Error::BindErr(key))
                 }
             }
@@ -367,12 +337,12 @@ impl EnvStruct {
     }
 
     /// Set an binding in the environment
-    pub fn set(&self, key: String, value: Value){
+    pub fn set(&self, key: Name, value: Value){
         self.data.borrow_mut().insert(key, value);
     }
 
     /// Search and set an binding in the environment
-    pub fn assign(&self, key: String, value: Value) -> ValueResult {
+    pub fn assign(&self, key: Name, value: Value) -> ValueResult {
         match self.data.borrow_mut().insert(key.clone(), value.clone()) {
             Some(v) => Ok(v),
             None => if let Some(env) = &self.access {
