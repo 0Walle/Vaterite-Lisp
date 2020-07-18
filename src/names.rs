@@ -1,13 +1,12 @@
 use std::cell::RefCell;
 
 /*
-1-7	1
-8-11	2
-12-25	3
-16-23	4
-24-31	5
-32>	6
-
+1-7     1
+8-11    2
+12-25   3
+16-23   4
+24-31   5
+32>     6
 */
 
 /// Interned name id
@@ -43,7 +42,7 @@ impl NamePool {
         if let Some(s) = get_builtin(name) {
             return s.to_string()
         }
-        self.names.borrow().get(name.0 as usize).unwrap_or(&"[invalid name]".to_string()).clone()
+        self.names.borrow().get(name.0 as usize).unwrap_or(&"[Invalid Name]".to_string()).clone()
     }
 
     pub fn name_vec_size(&self) -> usize {
@@ -104,7 +103,7 @@ buitin_names! {
     "eval" => EVAL = -25,
     "throw" => THROW = -26,
     "catch" => CATCH = -27,
-    "lazy-cons" => LAZY_CONS = -28,
+    "cons*" => LAZY_CONS = -28,
     "_" => IT_ = -29,
     "nil" => NIL = -30,
     "list" => LIST = -31,
@@ -135,4 +134,14 @@ buitin_names! {
     "loop" => LOOP = -56,
     "format" => FORMAT = -57,
     "assoc" => ASSOC = -58,
+    "map" => MAP = -59,
+    "filter" => FILTER = -60,
+    "number" => NUMBER = -61,
+    "char" => CHAR = -62,
+    "string" => STRING = -63,
+    "symbol" => SYMBOL = -64,
+    "keyword" => KEYWORD = -65,
+    "function" => FUNCTION = -66,
+    "box" => BOX = -67,
+    "sequence" => SEQUENCE = -68,
 }

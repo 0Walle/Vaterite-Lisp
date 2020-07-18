@@ -34,7 +34,7 @@ impl Printer {
                 res
             },
             Value::Box(val) => format!("(box {})", Printer::repr_name_(&(val.borrow()), level, names)),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_name_(&*head, level, names), Printer::repr_name_(&*tail, level, names)),
+            Value::Lazy{data, ..} => format!("(cons* {} {})", Printer::repr_name_(&data.head, level, names), Printer::repr_name_(&data.tail, level, names)),
             Value::Map(map) => {
                 let mut res = String::new();
                 res.push_str("#[\n");
@@ -61,9 +61,8 @@ impl Printer {
             Value::True => format!("#t"),
             Value::False => format!("#f"),
             Value::Num(n) => format!("{}", n),
-            Value::Str(s) => format!("{:?}", s),
+            Value::Str(s) => format!("{:?}", s.inner()),
             Value::Char(s) => format!("#{:?}", s),
-            Value::Chars(s) => format!("{:?}", s),
             Value::NatFunc(_) => format!("[NativeFunction]"),
             Value::Func { func, .. } => if let Some(name) = &func.name {
                 format!("[Function {}]", names.get(*name))
@@ -79,13 +78,16 @@ impl Printer {
             Value::True => format!("\x1b[95m#t\x1b[0m"),
             Value::False => format!("\x1b[95m#f\x1b[0m"),
             Value::Num(n) => format!("\x1b[93m{}\x1b[0m", n),
-            Value::Str(s) => format!("\x1b[32m{:?}\x1b[0m", s),
+            Value::Str(s) => format!("\x1b[32m{:?}\x1b[0m", s.inner()),
             Value::Char(s) => format!("\x1b[93m#{:?}\x1b[0m", s),
-            Value::Chars(s) => format!("{:?}", s),
             Value::Sym(s) => if level == 0 {
                     format!("'{}", names.get(*s))
                 } else {
-                    format!("{}", names.get(*s))
+                    if *s == crate::names::builtin::NIL {
+                        format!("\x1b[90mnil\x1b[0m")
+                    } else {
+                        format!("{}", names.get(*s))
+                    }
                 },
             Value::Keyword(s) => format!("\x1b[32m:{}\x1b[0m", names.get(*s)),
             Value::List(list) => {
@@ -111,7 +113,7 @@ impl Printer {
                 format!("\x1b[36m[Function]\x1b[0m")
             },
             Value::Box(val) => format!("(box {})", Printer::repr_color(&(val.borrow()), level, names)),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_color(&*head, level, names), Printer::repr_color(&*tail, level, names)),
+            Value::Lazy{data, ..} => format!("(cons* {} {})", Printer::repr_color(&data.head, level, names), Printer::repr_color(&data.tail, level, names)),
             Value::Map(map) => {
                 let mut res = String::new();
                 res.push_str("#[\n");
@@ -155,7 +157,7 @@ impl Printer {
                 res
             },
             Value::Box(val) => format!("(box {})", Printer::repr_name(&(val.borrow()), names)),
-            Value::Lazy{head, tail, ..} => format!("(lazy-cons {} {})", Printer::repr_name(&*head, names), Printer::repr_name(&*tail, names)),
+            Value::Lazy{data, ..} => format!("(cons* {} {})", Printer::repr_name(&data.head, names), Printer::repr_name(&data.tail, names)),
             Value::Map(map) => {
                 let mut res = String::new();
                 res.push_str("#[ ");
@@ -182,9 +184,8 @@ impl Printer {
             Value::True => format!("#t"),
             Value::False => format!("#f"),
             Value::Num(n) => format!("{}", n),
-            Value::Str(s) => format!("{}", s),
-            Value::Char(s) => format!("#{:?}", s),
-            Value::Chars(s) => format!("{:?}", s),
+            Value::Str(s) => format!("{}", s.inner()),
+            Value::Char(s) => format!("{}", s),
             Value::NatFunc(_) => format!("[NativeFunction]"),
             Value::Func { func, .. } => if let Some(name) = &func.name {
                 format!("[Function {}]", names.get(*name))

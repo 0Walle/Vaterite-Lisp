@@ -440,7 +440,7 @@ impl<'a, 'h> Reader<'a, 'h> {
             Token::False => ParserResult::Expr(Value::False),
             Token::Number(n) => ParserResult::Expr(Value::Num(n)),
             Token::Char(c) => ParserResult::Expr(Value::Char(c)),
-            Token::String(s) => ParserResult::Expr(Value::Str(s)),
+            Token::String(s) => ParserResult::Expr(Value::Str(s.into())),
             Token::Symbol(s) => ParserResult::Expr(Value::Sym(self.names.add(&s))),
             Token::Keyword(s) => ParserResult::Expr(Value::Keyword(self.names.add(&s))),
             _ => ParserResult::TokenErr("Invalid Syntax: Unexpected Token".to_string())

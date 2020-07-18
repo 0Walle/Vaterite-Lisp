@@ -11,8 +11,14 @@ pub struct FuncData {
     pub opt_params: Vec<(Name, Value)>,
     pub has_kwargs: bool,
     pub rest_param: Option<Name>,
+    pub is_macro: bool,
     pub name: Option<Name>,
     pub arity: Arity,
+}
+
+pub struct LazyData {
+    pub head: Value,
+    pub tail: Value,
 }
 
 #[derive(Clone)]
@@ -42,10 +48,8 @@ pub enum Value {
     Num(f64),
     /// Char value
     Char(char),
-    /// Chars value
-    Chars(Box<[char]>),
     /// String value
-    Str(String),
+    Str(SliceString),
     /// Symbol value, used to bind a value to env
     Sym(Name),
     /// Keyword value, like symbols that evaluate to themselves
@@ -59,7 +63,6 @@ pub enum Value {
         env: Env,
         eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
         func: Rc<FuncData>,
-        is_macro: bool,
     },
     /// Box refers to a vaterite value and is mutable
     Box(Rc<RefCell<Value>>),
@@ -67,10 +70,8 @@ pub enum Value {
     Lazy{
         env: Env,
         eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
-        head: Rc<Value>,
-        tail: Rc<Value>
+        data: Rc<LazyData>,
     },
-    // Map(Rc<HashMap<String,Value>>),
     Map(Rc<HashMap<Name, Value>>),
     Struct(Rc<String>, Rc<Vec<Value>>)
 }
@@ -94,8 +95,6 @@ impl PartialEq for Value {
             (Nil, List(a)) => a.len() == 0,
             (Str(a), Nil) => a.len() == 0,
             (Nil, Str(a)) => a.len() == 0,
-            (Chars(a), Nil) => a.len() == 0,
-            (Nil, Chars(a)) => a.len() == 0,
             (Func{func: a, ..}, Func{func: b, ..}) => Rc::ptr_eq(a, b),
             (NatFunc(a), NatFunc(b)) => a.name == b.name,
             (Box(a), Box(b)) => Rc::ptr_eq(a, b),
@@ -104,10 +103,12 @@ impl PartialEq for Value {
     }
 }
 
-impl From<&str> for Value { fn from(string: &str) -> Self { Value::Str(string.to_string()) }}
-impl From<String> for Value { fn from(string: String) -> Self { Value::Str(string) }}
+impl From<&str> for Value { fn from(string: &str) -> Self { Value::Str(string.into()) }}
+impl From<String> for Value { fn from(string: String) -> Self { Value::Str(string.into()) }}
+impl From<SliceString> for Value { fn from(string: SliceString) -> Self { Value::Str(string) }}
 impl From<Name> for Value { fn from(name: Name) -> Self { Value::Sym(name) }}
 impl From<f64> for Value { fn from(number: f64) -> Self { Value::Num(number) }}
+impl From<char> for Value { fn from(c: char) -> Self { Value::Char(c) }}
 impl From<bool> for Value { fn from(b: bool) -> Self { if b { Value::True } else { Value::False }}}
 impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(Rc::new(ls)) }}}
 
@@ -184,11 +185,8 @@ impl Value {
                 }
             },
             Value::Nil => Ok(Value::Nil),
-            Value::Lazy{head, ..} => Ok((**head).clone()),
-            Value::Chars(s) => match s.get(0) {
-                Some(ch) => Ok(Value::Char(*ch)),
-                None => Ok(Value::Nil)
-            },
+            Value::Str(s) => Ok(s.head().into()),
+            Value::Lazy{data, ..} => Ok(data.head.clone()),
             x => Err(Error::TypeErr("collection", Some(x.clone()))),
         }
     }
@@ -202,13 +200,9 @@ impl Value {
                     Ok(l[1..].to_vec().into())
                 }
             },
+            Value::Str(s) => Ok(s.tail().into()),
             Value::Nil => Ok(Value::Nil),
-            Value::Lazy{env, eval, tail, ..} => eval((**tail).clone(), env.clone(), names),
-            Value::Chars(s) => if s.len() != 1 {
-                Ok(Value::Chars(s[1..].into()))
-            } else {
-                Ok(Value::Nil)
-            },
+            Value::Lazy{eval, data, env} => eval(data.tail.clone(), env.clone(), names),
             x => Err(Error::TypeErr("collection", Some(x.clone())))
         }
     }
@@ -355,3 +349,72 @@ impl EnvStruct {
 }
 
 pub type Env = Rc<EnvStruct>;
+
+#[derive(Clone, PartialEq)]
+pub struct SliceString {
+    string: Rc<String>,
+    start: usize
+}
+
+impl From<String> for SliceString {
+    fn from(s: String) -> Self {
+        SliceString {
+            string: Rc::new(s),
+            start: 0
+        }
+    }
+}
+impl From<&str> for SliceString {
+    fn from(s: &str) -> Self {
+        SliceString {
+            string: Rc::new(s.to_owned()),
+            start: 0
+        }
+    }
+}
+
+impl SliceString {
+    pub fn len(&self) -> usize {
+        self.string.len() - self.start
+    }
+
+    pub fn inner(&self) -> &str {
+        &self.string[self.start..]
+    }
+
+    pub fn slice(&self, start: usize) -> Option<SliceString> {
+        let st = self.start + start;
+
+        if st > self.string.len() {
+            return None
+        }
+
+        if !self.string.is_char_boundary(st) {
+            return None
+        }
+
+        Some(SliceString {
+            string: self.string.clone(),
+            start: st,
+        })
+    }
+
+    pub fn head(&self) -> Option<char> {
+        (&self.string[self.start..]).chars().next()
+    }
+
+    pub fn tail(&self) -> Option<SliceString> {
+        match self.string.chars().next() {
+            Some(ch) => {
+                if self.start + ch.len_utf8() == self.string.len() {
+                    return None
+                };
+                Some(SliceString {
+                    string: self.string.clone(),
+                    start: self.start + ch.len_utf8(),
+                })
+            },
+            None => None
+        }
+    }
+}
