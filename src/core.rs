@@ -788,18 +788,16 @@ fn core_assert(v: ValueList, names: &NamePool) -> ValueResult {
     }
 }
 
-fn core_make_struct(v: ValueList, names: &NamePool) -> ValueResult {
-    let mut data: ValueList = vec![];
-
+fn core_make_struct(v: ValueList, _names: &NamePool) -> ValueResult {
     let struct_id = match &v[0] {
-        Value::Sym(s) => names.get(*s),
-        _ => return Err("Struct id must be a symbol".into())
+        Value::StructDef(s) => s,
+        _ => return Err("Struct id must be a struct def".into())
     };
-
-    for i in &v[1..] {
-        data.push(i.clone());
-    };
-    Ok(Value::Struct(Rc::new(struct_id.clone()),Rc::new(data)))
+    let data = v[1..].iter().cloned().collect::<ValueList>();
+    if struct_id.fields.len() != data.len() {
+        return Err("Invalid number of fields in struct".into())
+    }
+    Ok(Value::Struct(struct_id.clone(),Rc::new(data)))
 }
 
 fn core_member_struct(v: ValueList, names: &NamePool) -> ValueResult {
@@ -808,40 +806,31 @@ fn core_member_struct(v: ValueList, names: &NamePool) -> ValueResult {
         x => return type_err!("struct", x)
     };
 
-    let check_id = match &v[1] {
-        Value::Sym(s) => names.get(*s),
-        x => return type_err!("symbol", x)
+    let name = match &v[1] {
+        Value::Sym(n) | Value::Keyword(n) => n,
+        x => return type_err!("keyword", x)
     };
 
-    if (**struct_id).ne(&check_id) {
-        return Err(format!("Expected {} struct but found {}", check_id, struct_id).into())
-    }
+    let index = struct_id.fields.iter().position(|n| n == name).ok_or("Field doesn't exist in struct")?;
 
-    let index = match &v[2] {
-        Value::Num(n) => n,
-        x => return type_err!("number", x)
-    };
-
-    let value = match struct_data.get(*index as usize) {
+    let value = match struct_data.get(index) {
         Some(val) => val.clone(),
-        None => return Err(format!("Invalid access to struct {}, index {} not found", struct_id, index).into())
+        None => return Err(format!("Invalid access to struct {}, index {} not found", names.get(struct_id.name), index).into())
     };
 
     Ok(value)
 }
 
-fn core_assert_struct(v: ValueList, names: &NamePool) -> ValueResult {
+fn core_assert_struct(v: ValueList, _names: &NamePool) -> ValueResult {
     let struct_id = match &v[0] {
         Value::Struct(id, _) => id,
-        _ => return Err(format!("Expected Struct got {:?}", Printer::repr_name(&v[0], names)).into())
+        x => return type_err!("struct", x)
     };
-
     let check_id = match &v[1] {
-        Value::Sym(s) => names.get(*s),
-        x => return type_err!("symbol", x)
+        Value::StructDef(s) => s,
+        x => return type_err!("struct-def", x)
     };
-
-    Ok((**struct_id).eq(&check_id).into())
+    Ok((Rc::ptr_eq(struct_id, check_id)).into())
 }
 
 pub fn core_string_append_char(v: ValueList, _names: &NamePool) -> ValueResult {
@@ -1008,8 +997,8 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
         ("map-keys", Arity::Exact(1), core_map_keys),
         ("symbol", Arity::Exact(1), core_symbol),
         ("make-struct", Arity::Min(1), core_make_struct),
-        ("index-struct", Arity::Exact(3), core_member_struct),
-        ("assert-struct", Arity::Exact(2), core_assert_struct),
+        ("struct-field", Arity::Exact(2), core_member_struct),
+        ("is-struct?", Arity::Exact(2), core_assert_struct),
         ("assert", Arity::Range(1,3),core_assert),
         ("keyword", Arity::Exact(1), core_keyword),
         ("name-intern-number", Arity::Exact(1), core_keyword_intern_number),

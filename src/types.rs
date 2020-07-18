@@ -21,6 +21,11 @@ pub struct LazyData {
     pub tail: Value,
 }
 
+pub struct StructData {
+    pub fields: Vec<Name>,
+    pub name: Name,
+}
+
 #[derive(Clone)]
 pub enum Arity {
     Exact(u16),
@@ -73,7 +78,8 @@ pub enum Value {
         data: Rc<LazyData>,
     },
     Map(Rc<HashMap<Name, Value>>),
-    Struct(Rc<String>, Rc<Vec<Value>>)
+    StructDef(Rc<StructData>),
+    Struct(Rc<StructData>, Rc<Vec<Value>>)
 }
 
 pub type ValueList = Vec<Value>;
@@ -98,6 +104,7 @@ impl PartialEq for Value {
             (Func{func: a, ..}, Func{func: b, ..}) => Rc::ptr_eq(a, b),
             (NatFunc(a), NatFunc(b)) => a.name == b.name,
             (Box(a), Box(b)) => Rc::ptr_eq(a, b),
+            (StructDef(a), StructDef(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -140,6 +147,12 @@ impl Value {
                     Ok(x) => Ok(x)
                 }
             },
+            Value::StructDef(data) => {
+                if data.fields.len() != args.len() {
+                    return Err("Invalid number of fields in struct".into())
+                }
+                Ok(Value::Struct(data.clone(),Rc::new(args)))
+            }
             Value::Func{
                 func, eval, env, ..
             } => {
@@ -218,6 +231,13 @@ impl Value {
     pub fn to_pair(&self) -> Option<(Value, Value)> {
         match &self {
             Value::List(ls) if ls.len() == 2 => Some((ls[0].clone(), ls[1].clone())),
+            _ => None
+        }
+    }
+
+    pub fn to_name(&self) -> Option<Name> {
+        match &self {
+            Value::Sym(name) => Some(*name),
             _ => None
         }
     }

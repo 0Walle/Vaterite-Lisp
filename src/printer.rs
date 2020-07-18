@@ -46,17 +46,14 @@ impl Printer {
             }
             Value::Struct(id, list) => {
                 let mut res = String::new();
-                res.push_str(&format!("({} ", id));
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_name_(x, level + 1, names)))
-                }
-                for expr in it {
+                res.push_str(&format!("({}", names.get(id.name)));
+                for expr in list.iter() {
                     res.push_str(&format!(" {}", Printer::repr_name_(expr, level + 1, names)))
                 }
-                res.push_str("]");
+                res.push_str(")");
                 res
             }
+            Value::StructDef(id) => format!("[Struct {}]", names.get(id.name)),
             Value::Nil => format!("()"),
             Value::True => format!("#t"),
             Value::False => format!("#f"),
@@ -125,17 +122,14 @@ impl Printer {
             }
             Value::Struct(id, list) => {
                 let mut res = String::new();
-                res.push_str(&format!("({} ", id));
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::repr_color(x, level + 1, names)))
-                }
-                for expr in it {
+                res.push_str(&format!("({}", names.get(id.name)));
+                for expr in list.iter() {
                     res.push_str(&format!(" {}", Printer::repr_color(expr, level + 1, names)))
                 }
-                res.push_str("]");
+                res.push_str(")");
                 res
             }
+            Value::StructDef(id) => format!("[Struct {}]", names.get(id.name)),
         }
     }
 
@@ -169,17 +163,14 @@ impl Printer {
             }
             Value::Struct(id, list) => {
                 let mut res = String::new();
-                res.push_str(&format!("({} ", id));
-                let mut it = list.iter();
-                if let Some(x) = it.next() {
-                    res.push_str(&format!("{}", Printer::str_name(x, names)))
-                }
-                for expr in it {
+                res.push_str(&format!("({}", names.get(id.name)));
+                for expr in list.iter() {
                     res.push_str(&format!(" {}", Printer::str_name(expr, names)))
                 }
-                res.push_str("]");
+                res.push_str(")");
                 res
             }
+            Value::StructDef(id) => format!("[Struct {}]", names.get(id.name)),
             Value::Nil => format!("()"),
             Value::True => format!("#t"),
             Value::False => format!("#f"),

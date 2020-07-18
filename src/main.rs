@@ -21,7 +21,7 @@ use std::collections::HashMap;
 // TODO: Struct definition type
 // TODO: Compile!!
 
-use crate::types::{Value, Env, ValueList, FuncData, Arity, LazyData};
+use crate::types::{Value, Env, ValueList, FuncData, Arity, LazyData, StructData};
 use crate::printer::Printer;
 use crate::names::{NamePool, Name};
 use crate::names::builtin as stdname;
@@ -407,38 +407,33 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: &NamePool) -> Pattern
                     }
                     Binds(all_binds)
                 }
-                /*Value::Sym(s) if s == &stdname::STRUCT => {
+                Value::Sym(s) if s == &stdname::STRUCT => {
                     if let Value::Struct(id, expr) = expr {
-                        if ! match &l[1] {
-                            Value::Sym(check_id) => *check_id == *id,
-                            _ => return Some(Err(format!("Struct Id must be a symbol")))
-                        } {
-                            return None
+                        match &l[1] {
+                            Value::StructDef(check_id) => if ! Rc::ptr_eq(check_id, &id) {
+                                return Fail
+                            },
+                            _ => return Error(format!("Struct Id must be a symbol"))
                         }
-
-                        if l.len() == expr.len() + 2 {
-                            let mut all_binds = HashMap::default();
-                            for (pat, expr) in l[2..].iter().zip(expr.iter()) {
-                                match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
-                                    Some(res) => match res {
-                                        Ok(binds) => {
-                                            for (k, v) in binds {
-                                                all_binds.insert(k, v);
-                                            }
-                                        }
-                                        Err(err) => return Some(Err(err))
+                        if l.len() != expr.len() + 2 {
+                            return Fail
+                        }
+                        let mut all_binds = HashMap::default();
+                        for (pat, expr) in l[2..].iter().zip(expr.iter()) {
+                            match match_pattern(pat.clone(), expr.clone(), env.clone(), names) {
+                                Binds(binds) => {
+                                    for (k, v) in binds {
+                                        all_binds.insert(k, v);
                                     }
-                                    None => return None
                                 }
-                            };
-                            Some(Ok(all_binds))
-                        } else {
-                            None
-                        }
+                                x => return x,
+                            }
+                        };
+                        Binds(all_binds)
                     } else {
-                        None
+                        Fail
                     }
-                }*/
+                }
                 Value::Sym(s) if s == &stdname::FROM => {
                     let num = match expr {
                         Value::Num(expr) => expr,
@@ -605,76 +600,17 @@ fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
                         } else {
                             Err(type_err!("symbol"; l[1].clone()))
                         }
-                    /*Value::Sym(sym) if sym == &stdname::STRUCT =>
-                        if l.len() < 3 {
-                            // Err("struct form requires 3 arguments".to_string())
-                            Err(arg_err!("struct"; 2; l.len()))
-                        } else if let Value::Sym(name) = &l[1] {
-                            if let Some(fields) = &l[2].to_vec() {
-                                let mut ctor = vec![ vater!{(sym "make-struct")}, vater!{(QUOTE (sym name))}];
-                                ctor.extend_from_slice(&fields);
-                                let fields = match l[2].to_vec() {
-                                    Some(ls) => ls,
-                                    _ => return Err(format!("Struct fields must be a list").into())
-                                };
-                                let fields: Vec<String> = fields.iter().map(|v| v.from_sym().ok_or(format!("Expected Symbol"))).collect::<Result<Vec<String>, String>>()?;
-                                let ctor = Value::Func{
-                                    env: env.clone(), eval, is_macro: false,
-                                    func: Rc::new(FuncData {
-                                        params: fields.clone(),
-                                        opt_params: vec![], has_kwargs: false, rest_param: None,
-                                        name: Some(name.clone()),
-                                        arity: Arity::Exact(fields.len() as u16),
-                                        ast: ctor.into()
-                                    }),
-                                };
-                                env.set(name.clone(), ctor);
-
-                                for (i, field) in fields.iter().enumerate() {
-                                    // let field_name = match field {
-                                    //     Value::Sym(name) => name,
-                                    //     _ => return Err("Field name must be a symbol".into())
-                                    // };
-                                    let field_name = field;
-
-                                    let acessor = Value::Func{
-                                        env: env.clone(), eval, is_macro: false,
-                                        func: Rc::new(FuncData {
-                                            // params: vater!{(self)},
-                                            params: vec!["self".into()],
-                                            opt_params: vec![], has_kwargs: false, rest_param: None,
-                                            name: Some(format!("{}-{}", name, field_name)),
-                                            arity: Arity::Exact(1),
-                                            ast: vater!{
-                                                ((sym "index-struct") self (quote (sym name)) [Value::Num(i as f64)])
-                                            },
-                                        }),
-                                    };
-                                    env.set(format!("{}-{}", name, field_name), acessor);
-                                }
-
-                                let pred = Value::Func{
-                                    env: env.clone(), eval, is_macro: false,
-                                    func: Rc::new(FuncData {
-                                        // params: vater!{(self)},
-                                        params: vec!["self".into()],
-                                        opt_params: vec![], has_kwargs: false, rest_param: None,
-                                        name: Some(format!("{}?", name)),
-                                        arity: Arity::Exact(1),
-                                        ast: vater!{
-                                            ((sym "assert-struct") self (quote (sym name)))
-                                        },
-                                    }),
-                                };
-                                env.set(format!("{}?", name), pred);
-
-                                Ok(Value::Nil)
-                            } else {
-                                Err("Field list must be a list".into())
-                            }
-                        } else {
-                            Err("Struct name must be a symbol".into())
-                        }*/
+                    Value::Sym(sym) if sym == &stdname::STRUCT =>{
+                        let name = match &l[1] {
+                            Value::Sym(name) => name,
+                            x => return Err(type_err!("symbol"; x.clone()))
+                        };
+                        let fields: Vec<Name> = l[2..].iter().map(|v| v.to_name().ok_or(type_err!("symbol"; v.clone()))).collect::<Result<Vec<Name>, error::Error>>()?;
+                        env.set(name.clone(), Value::StructDef(Rc::new(StructData {
+                            name: *name, fields
+                        })));
+                        Ok(Value::Nil)
+                    }
                     Value::Sym(sym) if sym == &stdname::FUN =>
                         if l.len() < 4 {
                             Err(arg_err!(stdname::FUN; 3; l.len() - 1))
@@ -1081,6 +1017,12 @@ fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
                                         Ok(x) => Ok(x)
                                     }
                                 },
+                                Value::StructDef(data) => {
+                                    if data.fields.len() != args.len() {
+                                        return Err("Invalid number of fields in struct".into())
+                                    }
+                                    Ok(Value::Struct(data.clone(),Rc::new(args)))
+                                }
                                 Value::Func{
                                     func, eval, env: fenv, ..
                                 } => {
@@ -1171,7 +1113,7 @@ fn main() {
         1 => {
             println!("Vaterite Lisp - Walle - 2020");
 
-            println!("Sizeof Value = {}", std::mem::size_of::<error::Error>());
+            // println!("Sizeof Value = {}", std::mem::size_of::<error::Error>());
             
             let mut full_input = String::new();
             let mut done = true;
@@ -1216,7 +1158,6 @@ fn main() {
                     }
                 }
             }
-            println!("Done!");
         }
         2 => {
             let filename = &args[1];
