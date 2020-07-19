@@ -17,8 +17,11 @@ use std::collections::HashMap;
 
 // DONE: Name interning
 // DONE: Remove chars
+// TODO: Make more macros
+// TODO: Associate namepool with functions
 // TODO: Make "slice vector"
 // TODO: Struct definition type
+// TODO: Make more errors
 // TODO: Compile!!
 
 use crate::types::{Value, Env, ValueList, FuncData, Arity, LazyData, StructData};
@@ -518,6 +521,59 @@ fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
                             ast = quasiquote(l[1].clone());
                             continue 'tco;
                         }
+                    Value::Sym(sym) if sym == &stdname::PIPE_ => {
+                        if l.len() == 1 { return Ok(Value::Nil); }
+                        let mut args = &l[1..];
+                        let mut value = args[0].clone();
+                        loop {
+                            if args.len() < 2 {
+                                ast = value;
+                                continue 'tco;
+                            } else {
+                                match &args[1] {
+                                    Value::List(ls) => {
+                                        let mut call = vec![ls[0].clone(), value];
+                                        call.extend_from_slice(&ls[1..]);
+                                        value = call.into()
+                                    },
+                                    x => value = vec![x.clone(), value].into()
+                                }
+                                args = &args[1..];
+                            }
+                        }
+                    }
+                    Value::Sym(sym) if sym == &stdname::PIPEPE_ => {
+                        if l.len() == 1 { return Ok(Value::Nil); }
+                        let mut args = &l[1..];
+                        let mut value = args[0].clone();
+                        loop {
+                            if args.len() < 2 {
+                                ast = value;
+                                continue 'tco;
+                            } else {
+                                match &args[1] {
+                                    Value::List(ls) => {
+                                        let mut call = Vec::with_capacity(ls.len() + 1);
+                                        call.extend_from_slice(&ls[..]);
+                                        call.push(value);
+                                        value = call.into()
+                                    },
+                                    x => value = vec![x.clone(), value].into()
+                                }
+                                args = &args[1..];
+                            }
+                        }
+                    }
+                    Value::Sym(sym) if sym == &stdname::PARTIALR_ => {
+                        if l.len() < 2 { return Ok(Value::Nil); }
+                        if l.len() == 2 { return Ok(l[1].clone()) }
+                        let func = l[1].clone();
+                        let mut body = vec![vater!{APPLY}, func];
+                        body.extend_from_slice(&l[2..]);
+                        body.push(vater!{IT_});
+                        ast = vater!{ (FN ((: REST) IT_) [body]) };
+                        continue 'tco;
+                    }
                     Value::Sym(sym) if sym == &stdname::MACRO_EXPAND => macro_expand(l[1].clone(), env.clone(), names).1,
                     Value::Sym(sym) if sym == &stdname::IF => 
                         if l.len() != 4 {

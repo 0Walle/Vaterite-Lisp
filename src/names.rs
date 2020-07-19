@@ -144,4 +144,8 @@ buitin_names! {
     "function" => FUNCTION = -66,
     "box" => BOX = -67,
     "sequence" => SEQUENCE = -68,
+    "=>" => PIPE_ = -69,
+    "=>>" => PIPEPE_ = -70,
+    "p>" => PARTIALR_ = -71,
+    "apply" => APPLY = -72,
 }

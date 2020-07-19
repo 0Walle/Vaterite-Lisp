@@ -451,7 +451,7 @@ fn core_filter(v: ValueList, names: &NamePool) -> ValueResult {
     loop {
         match seq {
             Value::List(seq) => {
-                let mut result: Vec<Value> = Vec::with_capacity(seq.len());
+                let mut result: Vec<Value> = Vec::new();
                 for expr in seq.iter(){
                     if !func.apply(vec![expr.clone()], names)?.is_false() {
                         result.push(expr.clone())
