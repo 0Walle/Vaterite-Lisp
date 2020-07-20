@@ -571,8 +571,49 @@ fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
                         let mut body = vec![vater!{APPLY}, func];
                         body.extend_from_slice(&l[2..]);
                         body.push(vater!{IT_});
-                        ast = vater!{ (FN ((: REST) IT_) [body]) };
-                        continue 'tco;
+                        Ok(Value::Func{
+                            env: env.clone(),
+                            eval,
+                            func: Rc::new(FuncData {
+                                params: vec![],
+                                opt_params: vec![],
+                                has_kwargs: false,
+                                rest_param: Some(stdname::IT_),
+                                ast: body.into(),
+                                name: None,
+                                arity: Arity::Min(0),
+                                is_macro: false,
+                            }),
+                        })
+                    }
+                    Value::Sym(sym) if sym == &stdname::APPLY => {
+                        let len = l.len() - 1;
+                        if l.len() < 3 {
+                            return Ok(Value::Nil);
+                        }
+                        let mut args = l[2..len].iter()
+                            .map(|v| eval(v.clone(), env.clone(), names))
+                            .collect::<Result<ValueList, error::Error>>()?;
+                        let func = eval(l[1].clone(), env.clone(), names)?;
+                        
+                        match eval(l[len].clone(), env.clone(), names)? {
+                            Value::List(rest) => args.extend_from_slice(&rest),
+                            Value::Nil => {},
+                            x => return Err(type_err!("list"; x.clone()))
+                        }
+                        match func {
+                            Value::Func{
+                                func, eval, env: fenv, ..
+                            } => {
+                                let a = &(func).ast;
+                                let binds = &*func;
+                                let local_env = types::EnvStruct::bind(Some(fenv.clone()), binds, args, eval, names)?;
+                                ast = a.clone();
+                                env = local_env.clone();
+                                continue 'tco;
+                            },
+                            func => func.apply(args, names),
+                        }
                     }
                     Value::Sym(sym) if sym == &stdname::MACRO_EXPAND => macro_expand(l[1].clone(), env.clone(), names).1,
                     Value::Sym(sym) if sym == &stdname::IF => 
