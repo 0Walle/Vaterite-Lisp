@@ -521,7 +521,31 @@ fn core_input(_v: ValueList, _names: &NamePool) -> ValueResult {
 fn core_print(v: ValueList, names: &NamePool) -> ValueResult {
     let mut it = v.iter();
     if let Some(val) = it.next() {
-        print!("{}", Printer::str_name(val, names));
+        match val {
+            Value::Lazy{env, eval, data} => {                
+                let mut nth = data.tail.clone();
+                let mut env = env.clone();
+                print!("(");
+                loop {
+                    match eval(nth, env.clone(), names)? {
+                        Value::Lazy{env: tenv, data, ..} => {
+                            print!("{} ", Printer::str_name(&data.head, names));
+                            nth = data.tail.clone();
+                            env = tenv;
+                        }
+                        Value::Nil => {
+                            print!(")");
+                            return Ok(Value::Nil)
+                        }
+                        x => {
+                            print!("{})", Printer::str_name(&x, names));
+                            return Ok(Value::Nil)
+                        }
+                    }
+                }
+            }
+            val => print!("{}", Printer::str_name(val, names))
+        }
     }
     for expr in it {
         print!(" {}", Printer::str_name(expr, names));
