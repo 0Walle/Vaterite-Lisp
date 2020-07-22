@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
+use std::ops::{Deref};
+
 use crate::error::{Error};
 use crate::printer::Printer;
 use crate::names::{Name, NamePool};
@@ -60,7 +62,7 @@ pub enum Value {
     /// Keyword value, like symbols that evaluate to themselves
     Keyword(Name),
     /// List value, the basic container of vaterite
-    List(Rc<Vec<Value>>),
+    List(SliceList),
     /// Native function are used to define functions in rust that can be used in vaterite
     NatFunc(NatFunc),
     /// Vaterite function, defined by vaterite code
@@ -113,11 +115,12 @@ impl PartialEq for Value {
 impl From<&str> for Value { fn from(string: &str) -> Self { Value::Str(string.into()) }}
 impl From<String> for Value { fn from(string: String) -> Self { Value::Str(string.into()) }}
 impl From<SliceString> for Value { fn from(string: SliceString) -> Self { Value::Str(string) }}
+impl From<SliceList> for Value { fn from(list: SliceList) -> Self { Value::List(list) }}
 impl From<Name> for Value { fn from(name: Name) -> Self { Value::Sym(name) }}
 impl From<f64> for Value { fn from(number: f64) -> Self { Value::Num(number) }}
 impl From<char> for Value { fn from(c: char) -> Self { Value::Char(c) }}
 impl From<bool> for Value { fn from(b: bool) -> Self { if b { Value::True } else { Value::False }}}
-impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(Rc::new(ls)) }}}
+impl From<Vec<Value>> for Value { fn from(ls: Vec<Value>) -> Self { if ls.len() == 0 { Value::Nil } else { Value::List(ls.into()) }}}
 
 impl<T> From<Option<T>> for Value
     where T: Into<Value> { 
@@ -190,13 +193,7 @@ impl Value {
 
     pub fn first(&self) -> ValueResult {
         match self {
-            Value::List(l) => {
-                if l.len() == 0 {
-                    Ok(Value::Nil)
-                }else{
-                    Ok(l[0].clone())
-                }
-            },
+            Value::List(l) => Ok(l.head().into()),
             Value::Nil => Ok(Value::Nil),
             Value::Str(s) => Ok(s.head().into()),
             Value::Lazy{data, ..} => Ok(data.head.clone()),
@@ -206,13 +203,7 @@ impl Value {
 
     pub fn rest(&self, names: &NamePool) -> ValueResult {
         match self {
-            Value::List(l) => {
-                if l.len() == 0 {
-                    Ok(Value::Nil)
-                }else{
-                    Ok(l[1..].to_vec().into())
-                }
-            },
+            Value::List(l) => Ok(l.tail().into()),
             Value::Str(s) => Ok(s.tail().into()),
             Value::Nil => Ok(Value::Nil),
             Value::Lazy{eval, data, env} => eval(data.tail.clone(), env.clone(), names),
@@ -220,10 +211,10 @@ impl Value {
         }
     }
 
-    pub fn to_vec(&self) -> Option<Rc<ValueList>> {
+    pub fn to_vec(&self) -> Option<&[Value]> {
         match &self {
-            Value::List(ls) => Some(ls.clone()),
-            Value::Nil => Some(Rc::new(Vec::default())),
+            Value::List(ls) => Some(ls),
+            Value::Nil => Some(&[]),
             _ => None
         }
     }
@@ -370,7 +361,7 @@ impl EnvStruct {
 
 pub type Env = Rc<EnvStruct>;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct SliceString {
     string: Rc<String>,
     start: usize
@@ -390,6 +381,12 @@ impl From<&str> for SliceString {
             string: Rc::new(s.to_owned()),
             start: 0
         }
+    }
+}
+
+impl PartialEq for SliceString {
+    fn eq(&self, other: &SliceString) -> bool {
+        self.inner() == other.inner()
     }
 }
 
@@ -432,6 +429,77 @@ impl SliceString {
                 Some(SliceString {
                     string: self.string.clone(),
                     start: self.start + ch.len_utf8(),
+                })
+            },
+            None => None
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SliceList {
+    data: Rc<Vec<Value>>,
+    start: usize
+}
+
+impl PartialEq for SliceList {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner() == other.inner()
+    }
+}
+
+impl From<Vec<Value>> for SliceList {
+    fn from(l: Vec<Value>) -> Self {
+        SliceList {
+            data: Rc::new(l),
+            start: 0
+        }
+    }
+}
+
+impl Deref for SliceList {
+    type Target = [Value];
+
+    fn deref(&self) -> &[Value] {
+        self.inner()
+    }
+}
+
+// impl<'a> IntoIterator for &'a SliceList {
+//     type Item = &'a Value;
+//     type IntoIter = Iter<'a, Value>;
+
+//     fn into_iter(self) -> Iter<'a, Value> {
+//         self.data.iter()
+//     }
+// }
+
+impl SliceList {
+    pub fn len(&self) -> usize {
+        self.data.len() - self.start
+    }
+
+    pub fn inner(&self) -> &[Value] {
+        &self.data[self.start..]
+    }
+
+    pub fn get(&self, i: usize) -> Option<&Value> {
+        self.data.get(self.start + i)
+    }
+
+    pub fn head(&self) -> Option<Value> {
+        (&self.data[self.start..]).iter().next().cloned()
+    }
+
+    pub fn tail(&self) -> Option<SliceList> {
+        match self.data.iter().next() {
+            Some(_) => {
+                if self.start + 1 == self.data.len() {
+                    return None
+                };
+                Some(SliceList {
+                    data: self.data.clone(),
+                    start: self.start + 1,
                 })
             },
             None => None

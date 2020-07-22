@@ -18,9 +18,10 @@ use std::collections::HashMap;
 // DONE: Name interning
 // DONE: Remove chars
 // TODO: Make more macros
+// TODO: Macro reader
 // TODO: Associate namepool with functions
-// TODO: Make "slice vector"
-// TODO: Struct definition type
+// DONE: Make "slice vector"
+// DONE: Struct definition type
 // TODO: Make more errors
 // TODO: Compile!!
 
@@ -59,14 +60,14 @@ fn quasiquote(ast: Value) -> Value {
                 Value::Sym(s) if s == &stdname::UNQUOTE => return if list.len() > 1 { list[1].clone() } else { Value::Nil },
                 Value::List(l) if l.len() > 0 => match &l[0] {
                     Value::Sym(s) if s == &stdname::UNQUOTE_SPLICING => return vater!{
-                        (APPEND [if l.len() > 1 { l[1].clone() } else { Value::Nil}] [quasiquote(list[1..].to_vec().into())])
+                        (APPEND [if l.len() > 1 { l[1].clone() } else { Value::Nil}] [quasiquote(list.tail().into())])
                     },
                     _ => {}
                 }
                 _ => {}
             };
             let car = quasiquote(head.clone());
-            let cdr = quasiquote(list[1..].to_vec().into());
+            let cdr = quasiquote(list.tail().into());
             if cdr.is_nil() {
                 return vater!{ (LIST [car]) }
             }
@@ -150,14 +151,14 @@ fn eval_ast(ast: &Value, env: &Env, names: &NamePool) -> ValueResult {
             for expr in v.iter() {
                 lst.push(eval(expr.clone(), env.clone(), names)?)
             }
-            Ok(Value::List(Rc::new(lst)))
+            Ok(Value::List(lst.into()))
         }
         _ => Ok(ast.clone())
     }
 }
 
 /// Produces an lambda list from an vaterite lambda list
-fn from_lambda_list(list: ValueList) -> Result<(Vec<Name>, Vec<(Name, Value)>, bool, Option<Name>, Arity), error::Error> {
+fn from_lambda_list(list: &[Value]) -> Result<(Vec<Name>, Vec<(Name, Value)>, bool, Option<Name>, Arity), error::Error> {
     let mut req: Vec<Name> = vec![];
     let mut opt: Vec<(Name, Value)> = vec![];
     let mut keys = false;
@@ -901,7 +902,7 @@ fn eval(mut ast: Value, mut env: Env, names: &NamePool) -> ValueResult {
                         let mut modules: ValueList = vec![];
                         if match env.get(stdname::SP_MODULES)? {
                             Value::List(l) => {
-                                modules = (*l).clone();
+                                modules = l.to_vec();
                                 l.iter().any(|i| match i {
                                     Value::Sym(s) => s == mod_name,
                                     _ => false

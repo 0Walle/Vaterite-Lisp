@@ -174,7 +174,7 @@ fn operator_cons(v: ValueList, names: &NamePool) -> ValueResult {
             }else{
                 let mut new = vec![v[0].clone()];
                 new.reserve(l.len());
-                new.extend_from_slice(&l);
+                new.extend_from_slice(l.inner());
                 Ok(new.into())
             }
         },
@@ -191,7 +191,7 @@ fn operator_rev_cons(v: ValueList, names: &NamePool) -> ValueResult {
             }else{
                 let mut new = vec![];
                 new.reserve(l.len() + 1);
-                new.extend_from_slice(&l);
+                new.extend_from_slice(l.inner());
                 new.push(v[1].clone());
                 Ok(new.into())
             }
@@ -397,7 +397,7 @@ fn core_apply(v: ValueList, names: &NamePool) -> ValueResult {
     
     match &v[len-1] {
         Value::List(rest) => {
-            args.extend_from_slice(&rest);
+            args.extend_from_slice(rest.inner());
             v[0].apply(args, names).map_err(From::from)
         }
         Value::Nil => v[0].apply(args, names).map_err(From::from),
@@ -409,9 +409,9 @@ fn core_flatmap(v: ValueList, names: &NamePool) -> ValueResult {
     let func = &v[0];
     if let Value::List(seq) = &v[1] {
         let mut result: Vec<Value> = vec![];
-        for expr in seq.iter(){
+        for expr in seq.into_iter(){
             match func.apply(vec![expr.clone()], names)? {
-                Value::List(ls) => result.extend(ls.iter().cloned()),
+                Value::List(ls) => result.extend(ls.into_iter().cloned()),
                 Value::Nil => {}
                 x => return type_err!("list", x.clone())
             }
@@ -427,7 +427,7 @@ fn core_map(v: ValueList, names: &NamePool) -> ValueResult {
     match &v[1] {
         Value::List(seq) => {
             let mut result: Vec<Value> = Vec::with_capacity(seq.len());
-            for expr in seq.iter(){
+            for expr in seq.into_iter(){
                 result.push(func.apply(vec![expr.clone()], names)?)
             }
             return Ok(result.into())
@@ -452,7 +452,7 @@ fn core_filter(v: ValueList, names: &NamePool) -> ValueResult {
         match seq {
             Value::List(seq) => {
                 let mut result: Vec<Value> = Vec::new();
-                for expr in seq.iter(){
+                for expr in seq.into_iter(){
                     if !func.apply(vec![expr.clone()], names)?.is_false() {
                         result.push(expr.clone())
                     }
@@ -485,7 +485,7 @@ fn core_append(v: ValueList, _names: &NamePool) -> ValueResult {
     for seq in v {
         match seq {
             Value::List(l) => {
-                result.extend_from_slice(&l);
+                result.extend_from_slice(l.inner());
             }
             Value::Nil => {}
             x => return type_err!("sequence", x.clone())
@@ -648,7 +648,7 @@ fn core_collect(v: ValueList, names: &NamePool) -> ValueResult {
                     }
                     Value::Nil => break Ok(collect.into()),
                     Value::List(ls) => {
-                        collect.extend(ls.iter().cloned());
+                        collect.extend(ls.into_iter().cloned());
                         break Ok(collect.into())
                     }
                     x => {
@@ -715,7 +715,7 @@ fn core_format(v: ValueList, names: &NamePool) -> ValueResult {
                                     match v.get(current) {
                                         Some(e) => {
                                             if let Value::List(l) = e {
-                                                let mut it = l.iter();
+                                                let mut it = l.into_iter();
                                                 if let Some(expr) = it.next() {
                                                     if debug {
                                                         result.push_str(&format!("{}", Printer::repr_name(expr, names)))
@@ -768,7 +768,7 @@ fn core_join(v: ValueList, names: &NamePool) -> ValueResult {
 
     let mut result = String::new();
     if let Value::List(list) = &v[1] {
-        let mut it = list.iter();
+        let mut it = list.into_iter();
         if let Some(x) = it.next() {
             result.push_str(&format!("{}", Printer::str_name(x, names)))
         }
@@ -885,7 +885,7 @@ pub fn core_char_list_to_string(v: ValueList, _names: &NamePool) -> ValueResult 
     match &v[0] {
         Value::List(chrs) => {
             let mut res = String::new();
-            for chr in chrs.iter() {
+            for chr in chrs.into_iter() {
                 match chr {
                     Value::Char(ch) => res.push(*ch),
                     x => return type_err!("char", x),
@@ -913,17 +913,17 @@ pub fn core_chars_slice(v: ValueList, _names: &NamePool) -> ValueResult {
             },
             _ => Err("arguments are invalid".into())
         },
-        // 3 => match (&v[0], &v[1], &v[2]) {
-        //     (Value::Chars(chars), Value::Num(start), Value::Num(end)) => {
-        //         let slice = &chars[*start as usize .. *end as usize];
-        //         if slice.len() == 0 {
-        //             Ok(Value::Nil)
-        //         } else {
-        //             Ok(Value::Chars(Box::from(slice)))
-        //         }
-        //     },
-        //     _ => Err("arguments are invalid".into())
-        // },
+        3 => match (&v[0], &v[1], &v[2]) {
+            (Value::Str(chars), Value::Num(start), Value::Num(end)) => {
+                let slice = &chars.inner()[*start as usize .. *end as usize];
+                if slice.len() == 0 {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::Str(slice.into()))
+                }
+            },
+            _ => Err("arguments are invalid".into())
+        },
         _ => Err("arguments are invalid".into())
     }
 }
@@ -1057,7 +1057,7 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
             _ => Err("Can't deref non box".into())
         }),
         ("reverse", Arity::Exact(1), |v: Vec<Value>, _| match &v[0] {
-            Value::List(data) => Ok(data.iter().rev().map(|v| v.clone()).collect::<ValueList>().into()),
+            Value::List(data) => Ok(data.into_iter().rev().map(|v| v.clone()).collect::<ValueList>().into()),
             _ => Err("Can't reverse a non list".into())
         }),
         ("id", Arity::Exact(1), |v: Vec<Value>, _| return Ok(v[0].clone())),

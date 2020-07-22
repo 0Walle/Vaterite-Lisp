@@ -23,7 +23,7 @@ impl Printer {
                     res.push('\'');
                 };
                 res.push('(');
-                let mut it = list.iter();
+                let mut it = list.into_iter();
                 if let Some(x) = it.next() {
                     res.push_str(&format!("{}", Printer::repr_name_(x, level + 1, names)));
                 }
@@ -93,7 +93,7 @@ impl Printer {
                     res.push('\'');
                 };
                 res.push('(');
-                let mut it = list.iter();
+                let mut it = list.into_iter();
                 if let Some(x) = it.next() {
                     res.push_str(&format!("{}", Printer::repr_color(x, level + 1, names)));
                 }
@@ -140,7 +140,7 @@ impl Printer {
             Value::List(list) => {
                 let mut res = String::new();
                 res.push('(');
-                let mut it = list.iter();
+                let mut it = list.into_iter();
                 if let Some(x) = it.next() {
                     res.push_str(&format!("{}", Printer::str_name(x, names)));
                 }

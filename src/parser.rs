@@ -1,6 +1,5 @@
 use std::iter::Peekable;
 use std::str::Chars;
-use std::rc::Rc;
 
 use crate::types::{Value, ValueList};
 use crate::names::{NamePool};
@@ -16,7 +15,7 @@ macro_rules! vater {
     { (: $id:ident) } => { Value::Keyword(names::builtin::$id) };
     { [ $val:expr ] } => { Value::from($val) };
     { [list $ls:expr ] } => { Value::List(Rc::new($ls)) };
-    { ( $($exprs:tt)* ) } => { Value::List(Rc::new(vec![ $(vater_args!($exprs)),* ])) };
+    { ( $($exprs:tt)* ) } => { Value::List(vec![ $(vater_args!($exprs)),* ].into()) };
     { nil } => { Value::Nil };
     { $id:ident } => { Value::Sym( crate::names::builtin::$id ) };
     { $val:expr } => { Value::from($val) };
