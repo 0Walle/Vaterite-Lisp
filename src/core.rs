@@ -120,7 +120,7 @@ pub fn operator_head(v: ValueList, _names: &NamePool) -> ValueResult {
     v[0].first().map_err(From::from)
 }
 
-fn operator_nth(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_nth(v: ValueList, _names: &NamePool) -> ValueResult {
     let n = match &v[1] {
         Value::Num(n) => *n as usize,
         x => return type_err!("number", x),
@@ -145,7 +145,7 @@ fn operator_nth(v: ValueList, names: &NamePool) -> ValueResult {
             let mut env = env.clone();
             loop {
                 count -= 1;
-                match eval(nth, env.clone(), names)? {
+                match eval(nth, env.clone(), data.names.clone())? {
                     Value::Lazy{env: tenv, data, ..} => {
                         if count == 0 {
                             break Ok((data.head).clone())
@@ -162,8 +162,8 @@ fn operator_nth(v: ValueList, names: &NamePool) -> ValueResult {
     }
 }
 
-pub fn operator_tail(v: ValueList, names: &NamePool) -> ValueResult {
-    v[0].rest(names).map_err(From::from)
+pub fn operator_tail(v: ValueList, _names: &NamePool) -> ValueResult {
+    v[0].rest().map_err(From::from)
 }
 
 fn operator_cons(v: ValueList, names: &NamePool) -> ValueResult {
@@ -437,8 +437,9 @@ fn core_map(v: ValueList, names: &NamePool) -> ValueResult {
         } => Ok(Value::Lazy {
             eval: *eval, env: env.clone(), 
             data: Rc::new(LazyData {
-                head: func.apply(vec![data.head.clone()], names)?,
-                tail: vater!{ (MAP [func.clone()] [data.tail.clone()]) }
+                head: func.apply(vec![data.head.clone()], &data.names)?,
+                tail: vater!{ (MAP [func.clone()] [data.tail.clone()]) },
+                names: data.names.clone()
             })
         }),
         x => return type_err!("sequence", x.clone())
@@ -463,13 +464,14 @@ fn core_filter(v: ValueList, names: &NamePool) -> ValueResult {
                 data, env, eval
             } => {
                 if func.apply(vec![data.head.clone()], names)?.is_false() {
-                    seq = eval(data.tail.clone(), env.clone(), names)?
+                    seq = eval(data.tail.clone(), env.clone(), data.names.clone())?
                 } else {
                     return Ok(Value::Lazy {
                         eval, env: env.clone(),
                         data: Rc::new(LazyData {
                             head: data.head.clone(),
-                            tail: vater!{ (FILTER [func.clone()] [data.tail.clone()]) }
+                            tail: vater!{ (FILTER [func.clone()] [data.tail.clone()]) },
+                            names: data.names.clone()
                         })
                     })
                 }
@@ -505,9 +507,9 @@ fn helper_print_lazy(val: &Value, names: &NamePool) -> ValueResult {
             let mut env = env.clone();
             print!("({}", Printer::str_name(&data.head, names));
             loop {
-                match eval(nth, env.clone(), names)? {
+                match eval(nth, env.clone(), data.names.clone())? {
                     Value::Lazy{env: tenv, data, ..} => {
-                        print!(" {}", Printer::str_name(&data.head, names));
+                        print!(" {}", Printer::str_name(&data.head, &data.names));
                         nth = data.tail.clone();
                         env = tenv;
                     }
@@ -516,7 +518,7 @@ fn helper_print_lazy(val: &Value, names: &NamePool) -> ValueResult {
                         return Ok(Value::Nil)
                     }
                     x => {
-                        print!(" {})", Printer::str_name(&x, names));
+                        print!(" {})", Printer::str_name(&x, &data.names));
                         return Ok(Value::Nil)
                     }
                 }
@@ -563,7 +565,7 @@ fn core_repr(v: ValueList, names: &NamePool) -> ValueResult {
     Ok(Value::Str(format!("{}", Printer::repr_name(&v[0], names)).into()))
 }
 
-fn operator_len(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_len(v: ValueList, _names: &NamePool) -> ValueResult {
     let mut len = 0;
     let mut val = v[0].clone();
     loop {
@@ -572,7 +574,7 @@ fn operator_len(v: ValueList, names: &NamePool) -> ValueResult {
             Value::Str(s) => return Ok(Value::Num(s.len() as f64)),
             Value::Lazy{data, env, eval} => {
                 len += 1;
-                val = eval(data.tail.clone(), env.clone(), names)?;
+                val = eval(data.tail.clone(), env.clone(), data.names.clone())?;
             }
             Value::Nil => break,
             x => return type_err!("sequence", x.clone()),
@@ -630,7 +632,7 @@ fn operator_dec(v: ValueList, _names: &NamePool) -> ValueResult {
     }
 }
 
-fn core_collect(v: ValueList, names: &NamePool) -> ValueResult {
+fn core_collect(v: ValueList, _names: &NamePool) -> ValueResult {
     match &v[0] {
         Value::List(_) => Ok(v[0].clone()),
         Value::Nil => Ok(Value::Nil),
@@ -640,7 +642,7 @@ fn core_collect(v: ValueList, names: &NamePool) -> ValueResult {
             let mut nth = data.tail.clone();
             let mut env = env.clone();
             loop {
-                match eval(nth, env.clone(), names)? {
+                match eval(nth, env.clone(), data.names.clone())? {
                     Value::Lazy{env: tenv, data, ..} => {
                         collect.push(data.head.clone());
                         nth = data.tail.clone();

@@ -16,11 +16,13 @@ pub struct FuncData {
     pub is_macro: bool,
     pub name: Option<Name>,
     pub arity: Arity,
+    pub names: Rc<NamePool>,
 }
 
 pub struct LazyData {
     pub head: Value,
     pub tail: Value,
+    pub names: Rc<NamePool>,
 }
 
 pub struct StructData {
@@ -68,7 +70,7 @@ pub enum Value {
     /// Vaterite function, defined by vaterite code
     Func {
         env: Env,
-        eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
+        eval: fn(Value, Env, Rc<NamePool>) -> Result<Value, Error>,
         func: Rc<FuncData>,
     },
     /// Box refers to a vaterite value and is mutable
@@ -76,7 +78,7 @@ pub enum Value {
     /// Lazy is used to implement lazy sequences
     Lazy{
         env: Env,
-        eval: fn(Value, Env, &NamePool) -> Result<Value, Error>,
+        eval: fn(Value, Env, Rc<NamePool>) -> Result<Value, Error>,
         data: Rc<LazyData>,
     },
     Map(Rc<HashMap<Name, Value>>),
@@ -161,8 +163,8 @@ impl Value {
             } => {
                 let ast = &(**func).ast;
                 let binds = &*func;
-                let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval, names)?;
-                return Ok(match eval(ast.clone(), local_env, names) {
+                let local_env = EnvStruct::bind(Some(env.clone()), binds, args, *eval)?;
+                return Ok(match eval(ast.clone(), local_env, func.names.clone()) {
                     Ok(val) => val,
                     Err(err) => return match func.name {
                         Some(name) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(name)).into()),
@@ -201,12 +203,12 @@ impl Value {
         }
     }
 
-    pub fn rest(&self, names: &NamePool) -> ValueResult {
+    pub fn rest(&self) -> ValueResult {
         match self {
             Value::List(l) => Ok(l.tail().into()),
             Value::Str(s) => Ok(s.tail().into()),
             Value::Nil => Ok(Value::Nil),
-            Value::Lazy{eval, data, env} => eval(data.tail.clone(), env.clone(), names),
+            Value::Lazy{eval, data, env} => eval(data.tail.clone(), env.clone(), data.names.clone()),
             x => Err(Error::TypeErr("collection", Some(x.clone())))
         }
     }
@@ -266,23 +268,23 @@ impl EnvStruct {
     }
 
     /// Creates a new environment and bind values acordingly to a lambda list
-    pub fn bind(access: Option<Env>, binds: &FuncData, exprs: ValueList, eval: fn(Value, Env, &NamePool) -> ValueResult, names: &NamePool) -> Result<Env, Error> {
+    pub fn bind(access: Option<Env>, func: &FuncData, exprs: ValueList, eval: fn(Value, Env, Rc<NamePool>) -> ValueResult) -> Result<Env, Error> {
         let env = EnvStruct::new(access);
-        let (req, opt, keys, rest) = (&binds.params, &binds.opt_params, &binds.has_kwargs, &binds.rest_param);
+        let (req, opt, keys, rest) = (&func.params, &func.opt_params, &func.has_kwargs, &func.rest_param);
         let req_len = req.len();
         let opt_len = opt.len() * if *keys { 2 } else { 1 };
         let args_len = exprs.len();
 
-        if !match binds.arity {
+        if !match func.arity {
             Arity::Exact(n) => args_len == n.into(),
             Arity::Min(n) => args_len >= n.into(),
             Arity::Range(min, max) => min as usize <= args_len && args_len <= max.into(),
         } {
-            return Err(Error::ArgErr(binds.name.clone(), binds.arity.clone(), args_len as u16))
+            return Err(Error::ArgErr(func.name.clone(), func.arity.clone(), args_len as u16))
         }
 
         if *keys && (args_len - req_len) % 2 != 0 {
-            return Err(Error::KwArgErr(binds.name))
+            return Err(Error::KwArgErr(func.name))
         }
 
         for (i, b) in req.iter().enumerate() {
@@ -300,7 +302,7 @@ impl EnvStruct {
                         }
                     }
                 }
-                env.set(*key, eval(b.1.clone(), env.clone(), names)?);
+                env.set(*key, eval(b.1.clone(), env.clone(), func.names.clone())?);
             }
         } else {
             for (i, (name, value)) in opt.iter().enumerate() {
@@ -309,7 +311,7 @@ impl EnvStruct {
                         env.set(*name, expr.clone());
                     }
                     None => {
-                        env.set(*name, eval(value.clone(), env.clone(), names)?);
+                        env.set(*name, eval(value.clone(), env.clone(), func.names.clone())?);
                     }
                 }
             }
