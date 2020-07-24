@@ -1,5 +1,6 @@
 use std::iter::Peekable;
 use std::str::Chars;
+use std::collections::HashMap;
 
 use crate::types::{Value, ValueList};
 use crate::names::{NamePool};
@@ -43,14 +44,17 @@ pub enum Token {
     Symbol(String),
     Keyword(String),
     String(String),
-    Macro(String),
+    Macro(String, bool),
 }
+
+pub type ReaderMacroStore = HashMap<String, (String, bool)>;
 
 /// The tokenizer reads an input and produces expressions
 pub struct Reader<'a, 'h> {
     chars: Peekable<Chars<'a>>,
     names: &'h NamePool,
     current_line: i32,
+    pub macros: ReaderMacroStore
 }
 
 pub struct ReaderError {
@@ -84,6 +88,7 @@ impl<'a, 'h> Reader<'a, 'h> {
             chars: source.chars().peekable(),
             names,
             current_line: 1,
+            macros: HashMap::default()
         }
     }
 
@@ -191,7 +196,7 @@ impl<'a, 'h> Reader<'a, 'h> {
                                         None => return reader_err!("Unexpected end of input reading reader macro", self.current_line)
                                     };
                                     match self.read_symbol(chr) {
-                                        Ok(sym) => return Ok(Token::Macro(sym)),
+                                        Ok(sym) => return Ok(Token::Macro(sym, false)),
                                         Err(err) => return reader_err!(err, self.current_line)
                                     }
                                 }
@@ -231,7 +236,31 @@ impl<'a, 'h> Reader<'a, 'h> {
                                     self.chars.next();
                                     return Ok(Token::HashComment)
                                 }
-                                _ => return Ok(Token::Macro("macro-expand".to_string()))
+                                'a'..='z' => {
+                                    let chr = match self.chars.next() {
+                                        Some(c) => c,
+                                        None => return reader_err!("Unexpected end of input reading reader macro", self.current_line)
+                                    };
+                                    let name = match self.read_symbol(chr) {
+                                        Ok(sym) => sym,
+                                        Err(err) => return reader_err!(err, self.current_line)
+                                    };
+                                    match self.macros.get(&name) {
+                                        Some((name, splice)) => {
+                                            return Ok(Token::Macro(name.clone(), *splice))
+                                        },
+                                        None => return reader_err!(format!("Unknown reader macro {}", name), self.current_line)
+                                    }
+                                }
+                                x => {
+                                    match self.macros.get(&x.to_string()) {
+                                        Some((name, splice)) => {
+                                            self.chars.next();
+                                            return Ok(Token::Macro(name.clone(), *splice))
+                                        },
+                                        None => return reader_err!(format!("Unknown reader macro {}", x), self.current_line)
+                                    }
+                                }
                             }
                         }
                         None => return reader_err!("Unexpected end of input reading hash syntax", self.current_line),
@@ -413,14 +442,47 @@ impl<'a, 'h> Reader<'a, 'h> {
                 };
                 ParserResult::Expr(vater!{ (DEREF [val]) })
             },
-            Token::Macro(s) => {
+            Token::Macro(s, splice) => {
                 let tok = token_try!(self);
                 let val = match self.parse_expr(tok) {
                     ParserResult::Expr(expr) => expr,
                     err => return err
                 };
-                let name = self.names.add(&s);
-                ParserResult::Expr(vater!{ ([name] [val]) })
+                if s == "reader" {
+                    let args = val.to_vec().unwrap_or(&[]);
+                    if args.len() >= 3 {
+                        let key = match args[1] {
+                            Value::Sym(ch) => self.names.get(ch),
+                            _ => return ParserResult::TokenErr("Invalid Syntax: Expected symbol in transformer reader macro".to_string())
+                        };
+                        let value = match args[2] {
+                            Value::Sym(s) => self.names.get(s),
+                            _ => return ParserResult::TokenErr("Invalid Syntax: Expected symbol in transformer reader macro".to_string())
+                        };
+                        let splice = match args.get(3) {
+                            Some(Value::True) => true,
+                            Some(Value::False) => false,
+                            _ => false
+                        };
+                        self.macros.insert(key, (value, splice));
+                    }
+
+                    ParserResult::Expr(Value::Nil)
+                } else {
+                    let name = self.names.add(&s);
+                    if splice {
+                        match val {
+                            Value::List(ls) => {
+                                let mut res: ValueList = vec![name.into()];
+                                res.extend_from_slice(&ls);
+                                ParserResult::Expr(res.into())
+                            }
+                            _ => ParserResult::Expr(vater!{ ([name] [val]) })
+                        }
+                    } else {
+                        ParserResult::Expr(vater!{ ([name] [val]) })
+                    }
+                }
             },
             Token::HashComment => {
                 let tok = token_try!(self);

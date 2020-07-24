@@ -1215,6 +1215,7 @@ fn main() {
             
             let mut full_input = String::new();
             let mut done = true;
+            let mut reader_macros: parser::ReaderMacroStore = HashMap::default();
 
             loop {
                 if done {
@@ -1229,6 +1230,7 @@ fn main() {
                 io::stdin().read_line(&mut input).expect("Couldn't read input");
             
                 let mut reader = parser::Reader::new(&input, &pool);
+                reader.macros = reader_macros.clone();
                 let val = match reader.parse_form() {
                     (false, Err(err)) => {
                         done = true;
@@ -1255,6 +1257,7 @@ fn main() {
                         Err(err) => println!("\x1b[31mError: {}\x1b[0m", Printer::str_error(&err, &pool))
                     }
                 }
+                reader_macros = reader.macros;
             }
         }
         2 => {
