@@ -172,7 +172,7 @@ impl Value {
                     }
                 })
             },
-            _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(self, names)).into()),
+            _ => Err(Error::CallErr(Some(self.clone()))),
         }
     }
 
@@ -466,15 +466,6 @@ impl Deref for SliceList {
         self.inner()
     }
 }
-
-// impl<'a> IntoIterator for &'a SliceList {
-//     type Item = &'a Value;
-//     type IntoIter = Iter<'a, Value>;
-
-//     fn into_iter(self) -> Iter<'a, Value> {
-//         self.data.iter()
-//     }
-// }
 
 impl SliceList {
     pub fn len(&self) -> usize {

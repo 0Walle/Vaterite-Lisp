@@ -166,7 +166,7 @@ pub fn operator_tail(v: ValueList, _names: &NamePool) -> ValueResult {
     v[0].rest().map_err(From::from)
 }
 
-fn operator_cons(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_cons(v: ValueList, _names: &NamePool) -> ValueResult {
     match &v[1] {
         Value::List(l) => {
             if l.len() == 0 {
@@ -179,11 +179,11 @@ fn operator_cons(v: ValueList, names: &NamePool) -> ValueResult {
             }
         },
         Value::Nil => Ok(vec![v[0].clone()].into()),
-        x => Err(format!("Can't cons to a non-list {}", Printer::str_name(x, names)).into()),
+        x => return type_err!("list", x.clone())
     }
 }
 
-fn operator_rev_cons(v: ValueList, names: &NamePool) -> ValueResult {
+fn operator_rev_cons(v: ValueList, _names: &NamePool) -> ValueResult {
     match &v[0] {
         Value::List(l) => {
             if l.len() == 0 {
@@ -197,7 +197,7 @@ fn operator_rev_cons(v: ValueList, names: &NamePool) -> ValueResult {
             }
         },
         Value::Nil => Ok(vec![v[1].clone()].into()),
-        x => Err(format!("Can't rev-cons to a non-list {}", Printer::str_name(x, names)).into()),
+        x => return type_err!("list", x.clone()),
     }
 }
 
@@ -289,7 +289,7 @@ fn operator_map_get(v: ValueList, _names: &NamePool) -> ValueResult {
     match &v[1] {
         Value::Keyword(s) | Value::Sym(s) => match map.get(s){
             Some(v) => Ok(v.clone()),
-            None => Err(format!("Key {} is not present in map", s.0).into())
+            None => Err(error::Error::KeyErr(*s))
         },
         x => return type_err!("keyword", x.clone())
     }
@@ -757,7 +757,7 @@ fn core_format(v: ValueList, names: &NamePool) -> ValueResult {
             }
         }
     } else {
-        return Err("format requires a format string argument".into());
+        return type_err!("string", v[0].clone());
     }
 }
 

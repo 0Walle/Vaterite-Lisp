@@ -1044,8 +1044,14 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                             TypeErr(ty, got) => {
                                                 local_env.set(value.clone(), vater!{ ([Value::Str(ty.into())] [got.unwrap_or(Value::Nil)]) }); "TypeError"
                                             }
+                                            CallErr(got) => {
+                                                local_env.set(value.clone(), got.unwrap_or(Value::Nil)); "CallError"
+                                            }
                                             BindErr(name) => {
                                                 local_env.set(value.clone(), Value::Sym(name)); "NameError"
+                                            }
+                                            KeyErr(name) => {
+                                                local_env.set(value.clone(), Value::Sym(name)); "KeyError"
                                             }
                                             PairErr(name) => {
                                                 local_env.set(value.clone(), name.into()); "PairError"
@@ -1131,7 +1137,7 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                     env = local_env.clone();
                                     continue 'tco;
                                 },
-                                _ => Err(format!("Attempt to call non-function {}", Printer::repr_name(func, &names)).into()),
+                                _ => Err(error::Error::CallErr(Some(func.clone()))),
                             }
                         }
                         _ => unreachable!()

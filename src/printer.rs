@@ -190,6 +190,7 @@ impl Printer {
         match value {
             Error::Reason(s) => format!("{}", s),
             Error::BindErr(s) => format!("Name {} not found", names.get(*s)),
+            Error::KeyErr(s) => format!("Key {} not found in map", names.get(*s)),
             Error::KwArgErr(name) => if let Some(name) = name {
                 format!("Keyword arguments are not in pairs calling {}", names.get(*name))
             } else {
@@ -204,6 +205,11 @@ impl Printer {
                 format!("Expected value of type '{}' but got {}", expected, Printer::repr_name(&v, names))
             } else {
                 format!("Expected value of type '{}'", expected)
+            },
+            Error::CallErr(got) => if let Some(v) = got {
+                format!("Expected a callable value but got {}", Printer::repr_name(&v, names))
+            } else {
+                format!("Expected a callable value")
             },
             Error::PairErr(name) => if let Some(v) = name {
                 format!("{} must be a pair", v)

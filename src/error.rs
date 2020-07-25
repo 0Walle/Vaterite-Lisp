@@ -7,6 +7,8 @@ pub enum Error {
     ArgErr(Option<Name>, Arity, u16),
     KwArgErr(Option<Name>),
     TypeErr(&'static str, Option<Value>),
+    CallErr(Option<Value>),
+    KeyErr(Name),
     BindErr(Name),
     PairErr(Option<&'static str>),
     Throw(Option<Value>),
