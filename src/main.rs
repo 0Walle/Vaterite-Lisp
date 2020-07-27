@@ -17,11 +17,12 @@ use std::collections::HashMap;
 
 // DONE: Name interning
 // DONE: Remove chars
-// TODO: Make more macros
-// TODO: Macro reader
+// DONE: Make more macros
+// DONE: Macro reader
 // DONE: Associate namepool with functions
 // DONE: Make "slice vector"
 // DONE: Struct definition type
+// TODO: Read files in a better way
 // TODO: Make more errors
 // TODO: Compile!!
 
@@ -1166,11 +1167,11 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
 
 fn arg_parse(mut args: env::Args) -> (u8, Vec<String>) {
     // more flags can be added later
-    let mut flags = 0b0001;
+    let mut flags = 0b0000;
     let mut common_args = vec![];
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--nil-end" => flags &= !1,
+            "--file-print" => flags &= !1,
             "--color" => flags &= !2,
             _ => common_args.push(arg)
         }
@@ -1297,7 +1298,8 @@ fn main() {
 
             let file = File::open(filename);
 
-            let mut contents = String::from("(block ");
+            // let mut contents = String::from("(block ");
+            let mut contents = String::new();
             if let Ok(mut file) = file {
                 match file.read_to_string(&mut contents) {
                     Ok(_) => {},
@@ -1306,35 +1308,37 @@ fn main() {
                         return;
                     }
                 }
-                contents.push_str("\n)");
+                // contents.push_str("\n)");
 
                 let mut tk = parser::Reader::new(&contents, &pool);
-                let tok = match tk.next_token() {
-                    Ok(tok) => tok,
-                    Err(err) => {
-                        println!("Error: SyntaxError:{}: {}", err.line, err.err);
+                loop {
+                    let tok = match tk.next_token() {
+                        Ok(tok) => tok,
+                        Err(err) => {
+                            println!("Error: SyntaxError:{}: {}", err.line, err.err);
+                            return;
+                        },
+                    };
+    
+                    if let parser::Token::Eof = tok {
                         return;
-                    },
-                };
-
-                if let parser::Token::Eof = tok {
-                    return;
-                }
-
-                let val = match tk.parse_expr(tok) {
-                    parser::ParserResult::Expr(val) => val,
-                    parser::ParserResult::TokenErr(err) => {
-                        println!("Error: {}", err);
-                        return;
-                    },
-                    parser::ParserResult::EofErr => {
-                        println!("Error: Unexpected end of file");
-                        return;
-                    },
-                };
-                match eval(val, repl_env.clone(), pool.clone()) {
-                    Ok(e) => if flags & 1 != 0 {println!("{}", Printer::repr_name(&e, &pool))},
-                    Err(err) => println!("Error: {}", Printer::str_error(&err, &pool)),
+                    }
+    
+                    let val = match tk.parse_expr(tok) {
+                        parser::ParserResult::Expr(val) => val,
+                        parser::ParserResult::TokenErr(err) => {
+                            println!("Error: {}", err);
+                            return;
+                        },
+                        parser::ParserResult::EofErr => {
+                            println!("Error: Unexpected end of file");
+                            return;
+                        },
+                    };
+                    match eval(val, repl_env.clone(), pool.clone()) {
+                        Ok(e) => if flags & 1 != 0 {println!("{}", Printer::repr_name(&e, &pool))},
+                        Err(err) => println!("Error: {}", Printer::str_error(&err, &pool)),
+                    }
                 }
             } else {
                 println!("Couldn't open file");
