@@ -488,6 +488,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
 /// Evaluate an expression
 fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
     let ret: ValueResult;
+    // let mut name: Name;
 
     'tco: loop {
         ret = match ast.clone() {
@@ -1020,6 +1021,12 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                             _ => return Err(type_err!("symbol"; value.clone()))
                                         };
                                         use error::Error::*;
+                                        let err = if let x @ Trace(_, _) = err {
+                                            let (_, error) = error::collect_trace(&x);
+                                            error.clone()
+                                        } else {
+                                            err
+                                        };
                                         let sym = match err {
                                             Throw(val) => {
                                                 local_env.set(value.clone(), val.unwrap_or(Value::Nil)); "ThrowError"
@@ -1056,6 +1063,7 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                             PairErr(name) => {
                                                 local_env.set(value.clone(), name.into()); "PairError"
                                             }
+                                            _ => "Error"
                                         };
                                         local_env.set(kind.clone(), Value::Str(sym.into()));
                                     } else {
@@ -1118,7 +1126,8 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                         return Err(error::Error::ArgErr(Some(f.name), f.arity.clone(), args.len() as u16))
                                     }
                                     match (f.func)(args, &names) {
-                                        Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, &names), names.get(f.name)).into()),
+                                        // Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, &names), names.get(f.name)).into()),
+                                        Err(err) => Err(error::Error::Trace(f.name, Box::new(err))),
                                         Ok(x) => Ok(x)
                                     }
                                 },
@@ -1135,6 +1144,10 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                     let local_env = types::EnvStruct::bind(Some(fenv.clone()), &func, args, *eval)?;
                                     ast = a.clone();
                                     env = local_env.clone();
+                                    // match func.name {
+                                    //     Some(n) => name = n,
+                                    //     None => ()
+                                    // };
                                     continue 'tco;
                                 },
                                 _ => Err(error::Error::CallErr(Some(func.clone()))),

@@ -221,6 +221,9 @@ impl Printer {
             } else {
                 format!("Thrown error")
             },
+            Error::Trace(name, err) => {
+                format!("{}\n\t at {}", Printer::str_error(err, names), names.get(*name))
+            }
         }
     }
 }

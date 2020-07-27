@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::ops::{Deref};
 
 use crate::error::{Error};
-use crate::printer::Printer;
 use crate::names::{Name, NamePool};
 
 pub struct FuncData {
@@ -148,7 +147,8 @@ impl Value {
                     return Err(Error::ArgErr(Some(f.name), f.arity.clone(), args.len() as u16))
                 }
                 match (f.func)(args, names) {
-                    Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(f.name)).into()),
+                    // Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(f.name)).into()),
+                    Err(err) => Err(Error::Trace(f.name, Box::new(err))),
                     Ok(x) => Ok(x)
                 }
             },
@@ -167,8 +167,10 @@ impl Value {
                 return Ok(match eval(ast.clone(), local_env, func.names.clone()) {
                     Ok(val) => val,
                     Err(err) => return match func.name {
-                        Some(name) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(name)).into()),
-                        None => Err(format!("{}\n\tat lambda", Printer::str_error(&err, names)).into())
+                        Some(name) => Err(Error::Trace(name, Box::new(err))),
+                        None => Err(err),
+                        // Some(name) => Err(format!("{}\n\tat {}", Printer::str_error(&err, names), names.get(name)).into()),
+                        // None => Err(format!("{}\n\tat lambda", Printer::str_error(&err, names)).into())
                     }
                 })
             },

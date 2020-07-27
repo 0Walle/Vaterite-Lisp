@@ -12,7 +12,21 @@ pub enum Error {
     BindErr(Name),
     PairErr(Option<&'static str>),
     Throw(Option<Value>),
+    Trace(Name, Box<Error>)
 }
 
 impl From<&str> for Error { fn from(s: &str) -> Error { Error::Reason(s.to_string()) }}
 impl From<String> for Error { fn from(s: String) -> Error { Error::Reason(s) }}
+
+pub fn collect_trace(mut err: &Error) -> (Vec<Name>, &Error) {
+    let mut trace = vec![];
+    loop {
+        match err {
+            Error::Trace(name, error) => {
+                trace.push(*name);
+                err = error;
+            }
+            _ => return (trace, err)
+        }
+    }
+}
