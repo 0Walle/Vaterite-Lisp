@@ -953,10 +953,6 @@ pub fn core_name_from_intern_number(v: ValueList, _names: &NamePool) -> ValueRes
     }
 }
 
-pub fn core_name_interned_count(_v: ValueList, names: &NamePool) -> ValueResult {
-    Ok(Value::Num(names.name_vec_size() as f64))
-}
-
 pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult)>{
     vec![
         ("+", Arity::Min(0), |v: Vec<Value>, _| add_mul_op!(+, 0f64, v)),
@@ -1033,9 +1029,8 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
         ("is-struct?", Arity::Exact(2), core_assert_struct),
         ("assert", Arity::Range(1,3),core_assert),
         ("keyword", Arity::Exact(1), core_keyword),
-        ("name-intern-number", Arity::Exact(1), core_keyword_intern_number),
-        ("symbol-from-intern-number", Arity::Exact(1), core_name_from_intern_number),
-        ("interned-name-count", Arity::Exact(0), core_name_interned_count),
+        ("!!name-intern-number!!", Arity::Exact(1), core_keyword_intern_number),
+        ("!!symbol-from-intern-number!!", Arity::Exact(1), core_name_from_intern_number),
         ("box", Arity::Exact(1),|v: Vec<Value>, _| Ok(Value::Box(Rc::new(RefCell::new(v[0].clone()))))),
         ("set-box", Arity::Exact(2), |v: Vec<Value>, _| 
             match &v[0] {

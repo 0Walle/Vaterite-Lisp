@@ -1,52 +1,72 @@
 use std::cell::RefCell;
 
-/*
-1-7     1
-8-11    2
-12-25   3
-16-23   4
-24-31   5
-32>     6
-*/
-
 /// Interned name id
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Name(pub i32);
 
 /// Stores the interned names (aka hospital)
 pub struct NamePool {
-    names: RefCell<Vec<String>>
+    names: RefCell<[Vec<String>; 7]>
 }
 
 impl NamePool {
     pub fn new() -> Self {
         NamePool {
-            names: RefCell::new(vec![])
+            names: RefCell::new([vec![], vec![], vec![], vec![], vec![], vec![], vec![]])
         }
     }
 
     pub fn add(&self, name: &str) -> Name {
         let mut names = self.names.borrow_mut();
         if let Some(name) = get_builtin_name(name) {
-            name
-        } else if let Some(pos) = names.iter().position(|n| n == name) {
-            Name(pos as i32)
-        } else {
-            let n = names.len();
-            names.push(name.to_owned());
-            Name(n as i32)
+            return name
         }
+        let (index, level) = match name.len() {
+            0..=3 => unsafe {
+                let mut bytes: [u8; 4] = [0, 0, 0, 0];
+                bytes[0] = name.as_bytes().get(0usize).cloned().unwrap_or(0);
+                bytes[1] = name.as_bytes().get(1usize).cloned().unwrap_or(0);
+                bytes[2] = name.as_bytes().get(2usize).cloned().unwrap_or(0);
+                let index = std::mem::transmute::<[u8; 4], u32>(bytes);
+                (index as i32, 0)
+            },
+            4..=5 => (NamePool::search_vec(&mut names[0], name), 1),
+            6..=7 => (NamePool::search_vec(&mut names[1], name), 2),
+            8..=11 => (NamePool::search_vec(&mut names[2], name), 3),
+            12..=15 => (NamePool::search_vec(&mut names[3], name), 4),
+            16..=23 => (NamePool::search_vec(&mut names[4], name), 5),
+            24..=31 => (NamePool::search_vec(&mut names[5], name), 6),
+            _ => (NamePool::search_vec(&mut names[6], name), 7),
+        };
+        let name = index << 3 | level;
+        Name(name)
     }
 
     pub fn get(&self, name: Name) -> String {
         if let Some(s) = get_builtin(name) {
             return s.to_string()
         }
-        self.names.borrow().get(name.0 as usize).unwrap_or(&"[Invalid Name]".to_string()).clone()
+        let level = name.0 & 0b111;
+        let index = name.0 >> 3;
+        let names = self.names.borrow();
+        if level == 0 {
+            unsafe {
+                let bytes: [u8; 3] = [(index & 0xff) as u8, ((index & 0x00ff00) >> 8) as u8, ((index & 0xff0000) >> 16) as u8];
+                return String::from_utf8_unchecked(bytes.to_vec())
+            }
+        }
+        let level = level - 1;
+        names[level as usize].get(index as usize).unwrap_or(&"[Invalid Name]".to_string()).clone()
     }
 
-    pub fn name_vec_size(&self) -> usize {
-        self.names.borrow().len()
+    fn search_vec(names: &mut Vec<String>, name: &str) -> i32 {
+        if let Some(pos) = names.iter().position(|n| n == name) {
+            pos as i32
+        } else {
+            let n = names.len();
+            names.push(name.to_owned());
+            n as i32
+        }
     }
 }
 

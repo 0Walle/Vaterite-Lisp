@@ -22,9 +22,8 @@ use std::collections::HashMap;
 // DONE: Associate namepool with functions
 // DONE: Make "slice vector"
 // DONE: Struct definition type
-// TODO: Read files in a better way
+// DONE: Read files in a better way
 // TODO: Make more errors
-// TODO: Compile!!
 
 use crate::types::{Value, Env, ValueList, FuncData, Arity, LazyData, StructData};
 use crate::printer::Printer;
@@ -489,7 +488,6 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
 /// Evaluate an expression
 fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
     let ret: ValueResult;
-    // let mut name: Name;
 
     'tco: loop {
         ret = match ast.clone() {
@@ -1127,7 +1125,6 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                         return Err(error::Error::ArgErr(Some(f.name), f.arity.clone(), args.len() as u16))
                                     }
                                     match (f.func)(args, &names) {
-                                        // Err(err) => Err(format!("{}\n\tat {}", Printer::str_error(&err, &names), names.get(f.name)).into()),
                                         Err(err) => Err(error::Error::Trace(f.name, Box::new(err))),
                                         Ok(x) => Ok(x)
                                     }
@@ -1145,10 +1142,6 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                     let local_env = types::EnvStruct::bind(Some(fenv.clone()), &func, args, *eval)?;
                                     ast = a.clone();
                                     env = local_env.clone();
-                                    // match func.name {
-                                    //     Some(n) => name = n,
-                                    //     None => ()
-                                    // };
                                     continue 'tco;
                                 },
                                 _ => Err(error::Error::CallErr(Some(func.clone()))),
@@ -1230,8 +1223,6 @@ fn main() {
     match args.len() {
         1 => {
             println!("Vaterite Lisp - Walle - 2020");
-
-            // println!("Sizeof Value = {}", std::mem::size_of::<error::Error>());
             
             let mut full_input = String::new();
             let mut done = true;
@@ -1298,7 +1289,6 @@ fn main() {
 
             let file = File::open(filename);
 
-            // let mut contents = String::from("(block ");
             let mut contents = String::new();
             if let Ok(mut file) = file {
                 match file.read_to_string(&mut contents) {
@@ -1308,7 +1298,6 @@ fn main() {
                         return;
                     }
                 }
-                // contents.push_str("\n)");
 
                 let mut tk = parser::Reader::new(&contents, &pool);
                 loop {
