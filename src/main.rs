@@ -1343,6 +1343,6 @@ fn main() {
                 println!("Couldn't open file");
             }
         }
-        _ => println!("Invalid arguments")
+        _ => println!("Invalid command line arguments {:?}", args)
     }
 }

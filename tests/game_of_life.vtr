@@ -1,0 +1,50 @@
+(fun range (start end)
+  	(if (!= start end)
+  		(cons* start (range (inc start) end)) 
+  		nil))
+
+(fun enumerate (seq :opt (n 0))
+  	(if seq (cons* [n (first seq)] (enumerate (rest seq) (inc n))) nil))
+
+(fun moore-neighborhood (val) (match val 
+  	[x y] . (flatmap (fn (dx) (flatmap (fn (dy) 
+  			(if (== [dx dy] [0 0]) nil [[(+ x dx) (+ y dy)]] )
+  		) [-1 0 1])
+  		) [-1 0 1])))
+
+(fun print-world (cells)
+	(for (line . cells)
+		(println (apply str (for (cell . line) (if (== 0 cell) #'.' #'#'))))))
+
+(fun get-cell (cells x y)
+	(=> cells
+   		(nth (mod y 8))
+   		(nth (mod x 8))))
+
+(fun step (cells)
+  	(for (line . (enumerate cells))
+  		(for (cell . (enumerate (second line)))
+  			(let (count . (apply + (for (nei . (moore-neighborhood [(first cell) (first line)])) (get-cell cells (first nei) (second nei)))))
+  				(cond
+  					(== (second cell) 0) . (if (== count 3) 1 0)
+  					(== count 2) . 1
+  					(== count 3) . 1
+  					#t . 0 )))))
+
+(fun run (world) (block
+	(println "\n--------------------\n")
+	(print-world world)
+	(run (step world))))
+
+(def world [
+	[0 0 0 0 0 0 0 0]
+	[0 0 0 0 0 0 0 0]
+	[0 1 1 1 0 0 0 0]
+	[0 0 0 1 0 0 0 0]
+	[0 0 1 0 0 0 0 0]
+	[0 0 0 0 0 0 0 0]
+	[0 0 0 0 0 0 0 0]
+	[0 0 0 0 0 0 0 0]
+])
+
+(run world)
