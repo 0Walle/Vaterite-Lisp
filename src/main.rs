@@ -23,7 +23,7 @@ use std::collections::HashMap;
 // DONE: Make "slice vector"
 // DONE: Struct definition type
 // DONE: Read files in a better way
-// TODO: Make more errors
+// DONE: Pattern errors
 
 use crate::types::{Value, Env, ValueList, FuncData, Arity, LazyData, StructData};
 use crate::printer::Printer;
@@ -34,7 +34,7 @@ type ValueResult = Result<Value, error::Error>;
 
 enum PatternResult {
     Fail,
-    Error(String),
+    Error(error::Error),
     Binds(HashMap<Name, Value>)
 }
 
@@ -330,7 +330,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                 Value::Sym(s) if s == &stdname::IF => {
                     let func = match eval(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone(), names.clone()) {
                         Ok(pred) => pred,
-                        Err(err) => return Error(Printer::str_error(&err, &names))
+                        Err(err) => return Error(err)
                     };
 
                     let mut all_binds = HashMap::default();
@@ -338,7 +338,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                         Ok(res) => if res.is_false() {
                             return Fail
                         },
-                        Err(err) => return Error(Printer::str_error(&err, &names))
+                        Err(err) => return Error(err)
                     }
                     for pat in l[2..].iter() {
                         match match_pattern(pat.clone(), expr.clone(), env.clone(), names.clone()) {
@@ -393,7 +393,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                     for i in (1..l.len()).step_by(2) {
                         let key = match &l[i] {
                             Value::Keyword(n) | Value::Sym(n) => *n,
-                            _ => return Error(format!("Value cannot be used as key in hash-map pattern"))
+                            x => return Error(type_err!("keyword"; x.clone()))
                         };
                         let val = match map.get(&key) {
                             Some(val) => val,
@@ -416,7 +416,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                             Value::StructDef(check_id) => if ! Rc::ptr_eq(check_id, &id) {
                                 return Fail
                             },
-                            _ => return Error(format!("Struct Id must be a symbol"))
+                            x => return Error(type_err!("symbol"; x.clone()))
                         }
                         if l.len() != expr.len() + 2 {
                             return Fail
@@ -443,7 +443,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                         _ => return Fail
                     };
                     if l.len() != 3 {
-                        return Error(format!("from pattern requires two arguments"))
+                        return Fail
                     }
 
                     match (&l[1], &l[2]) {
@@ -454,24 +454,29 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
                                 Fail
                             }
                         }
-                        _ => return Error(format!("from pattern requires two number arguments"))
+                        (x, y) => if let Value::Num(_) = x{
+                            return Error(type_err!("number"; y.clone()))
+                        } else {
+                            return Error(type_err!("number"; x.clone()))
+                        }
                     }                    
                 }
                 Value::Sym(s) if s == &stdname::MACRO_EXPAND => {
-                    match macro_expand(l.get(1).unwrap_or(&Value::Nil).clone(), env.clone()) {
+                    if l.len() != 2 { return Fail }
+                    match macro_expand(l[1].clone(), env.clone()) {
                         (true, Ok(nast)) => {
                             match_pattern(nast, expr, env, names)
                         }
-                        (_, Err(err)) => Error(Printer::str_error(&err, &names)),
-                        _ => Error(format!("Failed expanding pattern as macro"))
+                        (_, Err(err)) => Error(err),
+                        _ => Error(error::Error::PatternErr(Some(l[1].clone())))
                     }
                 }
                 _ => match macro_expand(pat.clone(), env.clone()) {
                     (true, Ok(nast)) => {
                         match_pattern(nast, expr, env, names)
                     }
-                    (_, Err(err)) => Error(Printer::str_error(&err, &names)),
-                    _ => Error(format!("Invalid pattern"))
+                    (_, Err(err)) => Error(err),
+                    _ => Error(error::Error::PatternErr(Some(pat.clone())))
                 }
             }
         }
@@ -481,7 +486,7 @@ fn match_pattern(pat: Value, expr: Value, env: Env, names: Rc<NamePool>) -> Patt
         Value::False => if let Value::False = expr { Binds(HashMap::default()) } else { Fail }
         Value::True => if let Value::True = expr { Binds(HashMap::default()) } else { Fail }
         Value::Keyword(s) => if let Value::Keyword(expr) = expr { if s == expr { Binds(HashMap::default()) } else { Fail } } else { Fail }
-        _ => Error(format!("Invalid pattern"))
+        x => Error(error::Error::PatternErr(Some(x)))
     }
 }
 
@@ -657,14 +662,14 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                             env = local_env.clone();
                                             continue 'tco;
                                         }
-                                        PatternResult::Error(err) => return Err(format!("Pattern Error: {}", err).into()),
+                                        PatternResult::Error(err) => return Err(err),
                                         PatternResult::Fail => {}
                                     }
                                 }
                                 _ => return Err(pair_err!("match clause"))
                             }
                         };
-                        Err("No matching pattern found".into())
+                        Err(error::Error::MatchErr)
                     }
                     Value::Sym(sym) if sym == &stdname::AND => {
                         let mut res: ValueResult = Ok(Value::True);
@@ -816,13 +821,18 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                     }
                     Value::Sym(sym) if sym == &stdname::FOR => {
                         let len = l.len();
-                        if len == 1 {
+                        if len < 3 {
                             return Ok(Value::Nil);
                         }
                         let mut result: ValueList = vec![];
                         let mut iters: Vec<(Name, Value)> = vec![];
                         let local_env = types::EnvStruct::new(Some(env.clone()));
-                        for bind in l[1..len-1].iter() {
+
+                        let binds = match l[1].to_vec() {
+                            Some(binds) => binds,
+                            None => return Err(type_err!("list"; l[1].clone()))
+                        };
+                        for bind in binds {
                             if let Some((name, value)) = bind.to_pair() {
                                 if let Value::Sym(name) = &name {
                                     iters.push((*name, eval(value.clone(), env.clone(), names.clone())?));
@@ -840,7 +850,7 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                 }
                                 local_env.set(name.clone(), head);
                             }
-                            result.push(eval(l[len-1].clone(), local_env.clone(), names.clone())?);
+                            result.push(eval(l[2].clone(), local_env.clone(), names.clone())?);
                             iters = iters.iter().map(|(name, iter)| match iter.rest() {
                                 Ok(v) => Ok((name.clone(), v)),
                                 Err(err) => Err(err)
@@ -908,7 +918,7 @@ fn eval(mut ast: Value, mut env: Env, names: Rc<NamePool>) -> ValueResult {
                                 })
                             },
                             Value::Nil => false,
-                            _ => return Err("*modules* global not found".into())
+                            _ => return Err(error::Error::BindErr(stdname::SP_MODULES))
                         } {
                             return Ok(Value::Nil)
                         }

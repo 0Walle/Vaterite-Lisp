@@ -188,6 +188,8 @@ impl Printer {
 
     pub fn str_error(value: &Error, names: &NamePool) -> String {
         match value {
+            Error::MatchErr => "No matching pattern found".to_string(),
+            Error::AssertErr => "Assertation failed".to_string(),
             Error::Reason(s) => format!("{}", s),
             Error::BindErr(s) => format!("Name {} not found", names.get(*s)),
             Error::KeyErr(s) => format!("Key {} not found in map", names.get(*s)),
@@ -215,6 +217,11 @@ impl Printer {
                 format!("{} must be a pair", v)
             } else {
                 format!("Expected a pair")
+            },
+            Error::PatternErr(v) => if let Some(v) = v {
+                format!("Invalid pattern {}", Printer::repr_name(&v, names))
+            } else {
+                format!("Invalid pattern")
             },
             Error::Throw(v) => if let Some(v) = v {
                 format!("Thrown value '{}'", Printer::repr_name(&v, names))

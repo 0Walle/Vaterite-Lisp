@@ -11,6 +11,9 @@ pub enum Error {
     KeyErr(Name),
     BindErr(Name),
     PairErr(Option<&'static str>),
+    PatternErr(Option<Value>),
+    MatchErr,
+    AssertErr,
     Throw(Option<Value>),
     Trace(Name, Box<Error>)
 }

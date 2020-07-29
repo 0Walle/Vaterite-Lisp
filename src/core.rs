@@ -793,25 +793,25 @@ fn core_symbol(v: ValueList, names: &NamePool) -> ValueResult {
     }
 }
 
-fn core_assert(v: ValueList, names: &NamePool) -> ValueResult {
+fn core_assert(v: ValueList, _names: &NamePool) -> ValueResult {
     n_args! { v;
         1 => {
             if v[0].is_nil() {
-                return Err("AssertError".into())
+                return Err(error::Error::AssertErr)
             }else{
                 return Ok(v[0].clone())
             }
         },
         2 => {
             if v[0] != v[1] {
-                return Err("AssertError".into())
+                return Err(error::Error::AssertErr)
             }else{
                 return Ok(v[0].clone())
             }
         },
         3 => {
             if v[0] != v[1] {
-                return Err(format!("{}", Printer::str_name(&v[2], names)).into())
+                return Err(error::Error::Throw(Some(v[2].clone())))
             }else{
                 return Ok(v[0].clone())
             }
@@ -823,7 +823,7 @@ fn core_assert(v: ValueList, names: &NamePool) -> ValueResult {
 fn core_make_struct(v: ValueList, _names: &NamePool) -> ValueResult {
     let struct_id = match &v[0] {
         Value::StructDef(s) => s,
-        _ => return Err("Struct id must be a struct def".into())
+        x => return type_err!("struct-def", x.clone())
     };
     let data = v[1..].iter().cloned().collect::<ValueList>();
     if struct_id.fields.len() != data.len() {
@@ -934,7 +934,7 @@ pub fn core_keyword(v: ValueList, names: &NamePool) -> ValueResult {
     match &v[0] {
         Value::Keyword(_) => Ok(v[0].clone()),
         Value::Str(s) => Ok(Value::Keyword(names.add(s.inner()))),
-        x => type_err!("string, keyword", x.clone())
+        x => type_err!("string", x.clone())
     }
 }
 
@@ -958,7 +958,7 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
         ("+", Arity::Min(0), |v: Vec<Value>, _| add_mul_op!(+, 0f64, v)),
         ("*", Arity::Min(0), |v: Vec<Value>, _| add_mul_op!(*, 1f64, v)),
         ("-", Arity::Min(0), |v: Vec<Value>, _| sub_div_op!(-, Ok(Value::Num(0.)), |a: f64| -a, v)),
-        ("/", Arity::Min(0), |v: Vec<Value>, _| sub_div_op!(/, Err("Invalid number argument".into()), |a: f64| 1./a, v)),
+        ("/", Arity::Min(0), |v: Vec<Value>, _| sub_div_op!(/, Err(error::Error::TypeErr("number", None)), |a: f64| 1./a, v)),
         ("mod", Arity::Exact(2), |v: Vec<Value>, _| match (&v[0], &v[1]) {
             (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a.rem_euclid(*b))),
             (a, b) => type_err!("number", Value::from(vec![a.clone(), b.clone()]))
@@ -1035,7 +1035,7 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
         ("set-box", Arity::Exact(2), |v: Vec<Value>, _| 
             match &v[0] {
                 Value::Box(data) => {*data.borrow_mut() = v[1].clone(); Ok(v[1].clone())},
-                _ => Err("Value is not a box".into()),
+                x => type_err!("box", x.clone()),
         }),
         ("swap-box", Arity::Min(2), |v: Vec<Value>, names| 
             match &v[0] {
@@ -1046,16 +1046,16 @@ pub fn ns() -> Vec<(&'static str, Arity, fn(ValueList, &NamePool) -> ValueResult
                     *data.borrow_mut() = new_value;
                     Ok(v[1].clone())
                 },
-                _ => Err("Value is not a box".into()),
+                x => type_err!("box", x.clone()),
             }
         ),
         ("deref", Arity::Exact(1), |v: Vec<Value>, _| match &v[0] {
             Value::Box(data) => Ok(data.borrow().clone()),
-            _ => Err("Can't deref non box".into())
+            x => type_err!("box", x.clone()),
         }),
         ("reverse", Arity::Exact(1), |v: Vec<Value>, _| match &v[0] {
             Value::List(data) => Ok(data.into_iter().rev().map(|v| v.clone()).collect::<ValueList>().into()),
-            _ => Err("Can't reverse a non list".into())
+            x => type_err!("list", x.clone()),
         }),
         ("id", Arity::Exact(1), |v: Vec<Value>, _| return Ok(v[0].clone())),
         ("string/starts-with", Arity::Exact(2), core_string_starts_with),
